@@ -1,5 +1,5 @@
 import { env, exports } from 'cloudflare:workers';
-import { evictDurableObject } from 'cloudflare:test';
+import { evictDurableObject, runDurableObjectAlarm } from 'cloudflare:test';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   GameType,
@@ -179,6 +179,50 @@ describe('Orak Garak Worker', () => {
     });
     socket.socket.send('x'.repeat(16 * 1024 + 1));
     expect((await closed).code).toBe(1009);
+  });
+
+  it('promotes the next player to host when the current host leaves', () => {
+    const transport: GameTransport = {
+      sockets: { sockets: new Map() },
+      to: () => ({ emit: () => undefined }),
+      scheduleAlarm: async () => undefined,
+      clearAlarm: async () => undefined,
+    };
+    const session = new GameSession(transport, 'abcdefghij');
+    session.addPlayer('host', '방장');
+    session.addPlayer('next', '다음');
+
+    expect(session.isHost('host')).toBe(true);
+    session.removePlayer('host');
+    expect(session.isHost('next')).toBe(true);
+  });
+
+  it('closes a connection that exceeds the per-second message limit', async () => {
+    const roomId = await createRoom();
+    const joined = await join(roomId, '속도제한');
+    const closed = new Promise<CloseEvent>((resolve) => {
+      joined.socket.socket.addEventListener('close', resolve, { once: true });
+    });
+
+    for (let index = 0; index < 61; index += 1) {
+      joined.socket.send({
+        type: SystemPacketType.UPDATE_NUMBER,
+        number: index,
+      });
+    }
+    expect((await closed).code).toBe(1008);
+  });
+
+  it('finishes an Apple round through a Durable Object alarm', async () => {
+    const roomId = await createRoom();
+    const joined = await join(roomId, '알람');
+    joined.socket.send({ type: SystemPacketType.GAME_START_REQ });
+    await joined.socket.next(SystemPacketType.SET_TIME);
+
+    const endPacket = joined.socket.next(SystemPacketType.TIME_END);
+    const ran = await runDurableObjectAlarm(env.GAME_ROOMS.getByName(roomId));
+    expect(ran).toBe(true);
+    expect((await endPacket).results).toHaveLength(1);
   });
 
   it('returns an interrupted Flappy round to the lobby after an isolate restart', () => {
