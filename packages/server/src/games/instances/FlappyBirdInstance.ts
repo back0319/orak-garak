@@ -439,7 +439,7 @@ export class FlappyBirdInstance implements GameInstance {
       this.checkCollisions();
     }
 
-    // 6. 네트워크 브로드캐스트 (60Hz)
+    // 6. 네트워크 브로드캐스트 (물리 60Hz, 스냅샷 20Hz)
     if (this.physicsTick % (this.PHYSICS_FPS / this.NETWORK_TICK_RATE) === 0) {
       this.broadcastWorldState();
     }

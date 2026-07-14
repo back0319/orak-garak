@@ -1,5 +1,4 @@
 import {
-  FlappyBirdPacketType,
   SystemPacketType,
   type JoinAcceptedPacket,
   type JoinRoomPacket,
@@ -163,13 +162,6 @@ class SocketManager {
 
       const { type, ...payload } = packet;
       this.adapter.dispatch(type, payload);
-      if (type === FlappyBirdPacketType.FLAPPY_WORLD_STATE) {
-        this.adapter.dispatch('update_positions', payload);
-      } else if (type === FlappyBirdPacketType.FLAPPY_SCORE_UPDATE) {
-        this.adapter.dispatch('score_update', payload);
-      } else if (type === FlappyBirdPacketType.FLAPPY_GAME_OVER) {
-        this.adapter.dispatch('game_over', payload);
-      }
       handleServerPacket(packet);
     });
 

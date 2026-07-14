@@ -1293,7 +1293,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
           </button>
           {isHost && players.length === 1 && (
             <div className="button-tooltip invite-tooltip">
-              {'다른 사람을 초대하고 게임을 시작하세요'}
+              {'친구를 초대하거나 혼자 게임을 시작하세요'}
             </div>
           )}
         </div>
@@ -1301,8 +1301,9 @@ function Lobby({ players, onGameStart }: LobbyProps) {
           className="button-wrapper"
           onMouseEnter={() => {
             playSFX('buttonHover');
-            (!selectedGame || isDisabled || players.length < 2) &&
+            if (!selectedGame || isDisabled) {
               setShowButtonTooltip(true);
+            }
           }}
           onMouseLeave={() => setShowButtonTooltip(false)}
         >
@@ -1312,7 +1313,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
               playSFX('buttonClick');
               handleStartGame();
             }}
-            disabled={!selectedGame || isDisabled || players.length < 2}
+            disabled={!selectedGame || isDisabled}
           >
             게임 시작
           </button>
@@ -1321,12 +1322,9 @@ function Lobby({ players, onGameStart }: LobbyProps) {
               {'방장만 게임을 시작할 수 있습니다.'}
             </div>
           )}
-          {showButtonTooltip &&
-            isHost &&
-            players.length >= 2 &&
-            !selectedGame && (
-              <div className="button-tooltip">{'게임을 선택해주세요'}</div>
-            )}
+          {showButtonTooltip && isHost && !selectedGame && (
+            <div className="button-tooltip">{'게임을 선택해주세요'}</div>
+          )}
         </div>
       </div>
     </div>

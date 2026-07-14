@@ -12,6 +12,10 @@ import {
   type PersistedGameSession,
 } from '../src/games/gameSession';
 import type { GameTransport } from '../src/network/transport';
+import {
+  getPredictionFrames,
+  getSmoothingAlpha,
+} from '../../client/src/game/scene/flappybirds/interpolation';
 
 interface Packet {
   type: string;
@@ -244,5 +248,19 @@ describe('Orak Garak Worker', () => {
 
     expect(session.restore(snapshot)).toEqual({ interrupted: true });
     expect(session.status).toBe('waiting');
+  });
+});
+
+describe('Flappy rendering interpolation', () => {
+  it('predicts between 20Hz snapshots but caps long network stalls', () => {
+    expect(getPredictionFrames(50)).toBeCloseTo(3, 5);
+    expect(getPredictionFrames(100)).toBeCloseTo(6, 5);
+    expect(getPredictionFrames(500)).toBeCloseTo(6, 5);
+  });
+
+  it('uses frame-time independent smoothing', () => {
+    const oneFrame = getSmoothingAlpha(1000 / 60);
+    const twoFrames = 1 - (1 - oneFrame) ** 2;
+    expect(getSmoothingAlpha(1000 / 30)).toBeCloseTo(twoFrames, 5);
   });
 });
