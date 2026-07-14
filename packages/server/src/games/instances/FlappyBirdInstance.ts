@@ -4,20 +4,17 @@ import {
   FlappyBirdGamePreset,
   resolveFlappyBirdPreset,
   FLAPPY_PHYSICS,
-} from '../../../../common/src/config';
+} from '@main-game/common';
 import {
   FlappyBirdPacketType,
   FlappyScoreUpdatePacket,
   FlappyGameOverPacket,
   FlappyWorldStatePacket,
   FlappySyncStatePacket,
-} from '../../../../common/src/packets';
-import {
-  FlappyPipeData,
-  FlappyBirdData,
-} from '../../../../common/src/common-type';
+} from '@main-game/common';
+import { FlappyPipeData, FlappyBirdData } from '@main-game/common';
 import { GameSession } from '../gameSession';
-import { Socket } from 'socket.io';
+import type { GameSocket } from '../../network/transport';
 
 // 상수 추출
 const {
@@ -81,7 +78,7 @@ export class FlappyBirdInstance implements GameInstance {
   // 루프 관리
   private updateInterval: NodeJS.Timeout | null = null;
   private readonly PHYSICS_FPS = 60;
-  private readonly NETWORK_TICK_RATE = 60;
+  private readonly NETWORK_TICK_RATE = 20;
 
   private session: GameSession;
 
@@ -183,7 +180,17 @@ export class FlappyBirdInstance implements GameInstance {
     console.log('[FlappyBirdInstance] 정리 완료');
   }
 
-  handlePacket(socket: Socket, playerIndex: number, packet: any): void {
+  serialize(): unknown {
+    // A running physics loop is intentionally not persisted. The room restores
+    // to the lobby after an isolate restart instead of resuming a divergent sim.
+    return null;
+  }
+
+  restore(_snapshot: unknown): void {
+    this.isRunning = false;
+  }
+
+  handlePacket(socket: GameSocket, playerIndex: number, packet: any): void {
     switch (packet.type) {
       case FlappyBirdPacketType.FLAPPY_JUMP:
         this.handleJump(playerIndex);
@@ -198,7 +205,7 @@ export class FlappyBirdInstance implements GameInstance {
    * 클라이언트 씬 로딩 완료 후 동기화 요청 처리
    * 현재 게임 상태를 해당 클라이언트에게 전송
    */
-  private handleSyncRequest(socket: Socket): void {
+  private handleSyncRequest(socket: GameSocket): void {
     // 현재 새 위치 정보
     const birds: FlappyBirdData[] = this.birds.map((bird) => ({
       x: bird.position.x,
@@ -239,7 +246,8 @@ export class FlappyBirdInstance implements GameInstance {
     };
 
     // 요청한 클라이언트에게만 전송
-    socket.emit('packet', syncPacket);
+    const { type, ...payload } = syncPacket;
+    socket.emit(type, payload);
 
     console.log(
       `[FlappyBirdInstance] 동기화 응답 전송 (gameOver: ${this.isGameOverState}, score: ${this.score})`,

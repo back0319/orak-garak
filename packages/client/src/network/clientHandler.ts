@@ -37,6 +37,20 @@ export const handleServerPacket = (packet: ServerPacket) => {
       console.log(`Player ${packet.playerName} joined ${packet.roomId}`);
       break;
 
+    case SystemPacketType.JOIN_ACCEPTED:
+      break;
+
+    case SystemPacketType.GAME_INTERRUPTED: {
+      const store = useGameStore.getState();
+      store.resetGameState();
+      store.resetFlappyState();
+      store.setGameStarted(false);
+      store.setScreen('lobby');
+      store.setConnectionError({ message: packet.message });
+      bgmManager.pause();
+      break;
+    }
+
     case SystemPacketType.ROOM_UPDATE: {
       // update global store (clientHandler runs outside React)
       const roomPacket = packet as RoomUpdatePacket;

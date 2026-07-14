@@ -3,8 +3,8 @@
 /* START OF COMPILED CODE */
 
 import Phaser from 'phaser';
-import type { Socket } from 'socket.io-client';
 import { getSocket, isMockMode } from '../../network/socketService';
+import type { GameClientSocket } from '../../../network/socket';
 import { MockSocket } from '../../network/MockSocket';
 import { MockServerCore } from '../../physics/MockServerCore';
 import {
@@ -55,7 +55,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     '#f2d024': 'flappybird_4', // 노랑
   };
 
-  private socket!: Socket | MockSocket;
+  private socket!: GameClientSocket | MockSocket;
   private mockServerCore?: MockServerCore;
   private myPlayerId: PlayerId = '0';
   private pipeManager?: PipeManager;

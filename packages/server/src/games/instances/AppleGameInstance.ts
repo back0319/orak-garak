@@ -3,28 +3,27 @@ import {
   AppleGameRenderConfig,
   DEFAULT_APPLE_GAME_RENDER_CONFIG,
   GameType,
-} from '../../../../common/src/config';
+} from '@main-game/common';
 import {
   AppleGamePacket,
   AppleGamePacketType,
   DropCellIndexPacket,
   ReadyScenePacket,
-  ReturnToTheLobbyPacket,
   SetFieldPacket,
   SetTimePacket,
   SystemPacketType,
   TimeEndPacket,
   UpdateScorePacket,
-} from '../../../../common/src/packets';
-import { PlayerData, ReportCard } from '../../../../common/src/common-type';
+} from '@main-game/common';
+import type { PlayerData, ReportCard } from '@main-game/common';
 import { GameSession } from '../gameSession';
-import { Socket } from 'socket.io';
+import type { GameSocket } from '../../network/transport';
 
 export class AppleGameInstance implements GameInstance {
   private apples: number[] = [];
   private removedIndices: Set<number> = new Set();
-  private timerInterval: NodeJS.Timeout | null = null;
   private timeLeft: number = 0;
+  private endsAt: number = 0;
 
   // Player ID -> last drag area & repeat count
   private playerDragState = new Map<
@@ -98,18 +97,62 @@ export class AppleGameInstance implements GameInstance {
   }
 
   stop(): void {
-    if (this.timerInterval) {
-      clearInterval(this.timerInterval);
-      this.timerInterval = null;
-    }
+    void this.session.io.clearAlarm();
   }
 
   destroy(): void {}
 
+  serialize(): unknown {
+    return {
+      apples: this.apples,
+      removedIndices: Array.from(this.removedIndices),
+      timeLeft: Math.max(0, Math.ceil((this.endsAt - Date.now()) / 1000)),
+      endsAt: this.endsAt,
+      playerDragState: Array.from(this.playerDragState.entries()),
+    };
+  }
+
+  restore(snapshot: unknown): void {
+    const data = snapshot as {
+      apples: number[];
+      removedIndices: number[];
+      timeLeft: number;
+      endsAt: number;
+      playerDragState: Array<
+        [
+          number,
+          {
+            startX: number;
+            startY: number;
+            endX: number;
+            endY: number;
+            repeatCount: number;
+          },
+        ]
+      >;
+    };
+    this.apples = data.apples;
+    this.removedIndices = new Set(data.removedIndices);
+    this.timeLeft = data.timeLeft;
+    this.endsAt = data.endsAt;
+    this.playerDragState = new Map(data.playerDragState);
+    if (this.endsAt <= Date.now()) {
+      this.finishGame();
+    } else {
+      void this.session.io.scheduleAlarm(this.endsAt);
+    }
+  }
+
+  handleAlarm(): void {
+    if (this.session.status === 'playing') {
+      this.finishGame();
+    }
+  }
+
   // todo 얘내 gameSession으로 빼내야 함
   handlePacket(
-    socket: Socket,
-    playerIndex: number,
+    socket: GameSocket,
+    _playerIndex: number,
     packet: AppleGamePacket,
   ): void {
     switch (packet.type) {
@@ -211,14 +254,9 @@ export class AppleGameInstance implements GameInstance {
   }
 
   private startTimer() {
-    if (this.timerInterval) clearInterval(this.timerInterval);
     console.log('[GameSession] Timer started with', this.timeLeft, 'seconds');
-    this.timerInterval = setInterval(() => {
-      this.timeLeft--;
-      if (this.timeLeft <= 0) {
-        this.finishGame();
-      }
-    }, 1000);
+    this.endsAt = Date.now() + this.timeLeft * 1000;
+    void this.session.io.scheduleAlarm(this.endsAt);
   }
 
   private finishGame() {
@@ -236,7 +274,8 @@ export class AppleGameInstance implements GameInstance {
     }
     // Calculate Rank
     const results: PlayerData[] = Array.from(this.session.players.values())
-      .map(({ playerName, color, reportCard }) => ({
+      .map(({ id, playerName, color, reportCard }) => ({
+        id,
         playerName,
         color,
         reportCard,

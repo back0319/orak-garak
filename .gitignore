@@ -8,6 +8,8 @@ pnpm-debug.log*
 lerna-debug.log*
 
 .claude
+.wrangler
+.dev.vars*
 
 node_modules
 dist

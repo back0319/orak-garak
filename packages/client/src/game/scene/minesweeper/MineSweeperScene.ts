@@ -3,8 +3,9 @@
 /* START OF COMPILED CODE */
 
 import Phaser from 'phaser';
-import type { Socket } from 'socket.io-client';
 import { getSocket, isMockMode } from '../../network/socketService';
+import type { GameClientSocket } from '../../../network/socket';
+import { socketManager } from '../../../network/socket';
 import { MockSocket } from '../../network/MockSocket';
 import { MineSweeperMockCore } from '../../physics/MineSweeperMockCore';
 import { GAME_WIDTH, GAME_HEIGHT } from '../../config/gameConfig';
@@ -47,7 +48,7 @@ export default class MineSweeperScene extends Phaser.Scene {
   );
 
   // 네트워크
-  private socket!: Socket | MockSocket;
+  private socket!: GameClientSocket | MockSocket;
   private mockServerCore?: MineSweeperMockCore;
 
   // 타일 매니저
@@ -908,8 +909,7 @@ export default class MineSweeperScene extends Phaser.Scene {
     if (isMockMode()) {
       return this.myPlayerId;
     } else {
-      // 서버 모드에서는 소켓 ID 사용
-      return (this.socket as Socket).id as PlayerId;
+      return (socketManager.getId() ?? this.myPlayerId) as PlayerId;
     }
   }
 

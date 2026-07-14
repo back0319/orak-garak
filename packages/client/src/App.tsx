@@ -19,11 +19,7 @@ import {
 import { GameType } from '../../common/src/config';
 import type { PlayerId, GameOverEvent } from './game/types/flappybird.types';
 import { CONSTANTS } from './game/types/common';
-import {
-  SystemPacketType,
-  type JoinRoomPacket,
-  type ServerPacket,
-} from '../../common/src/packets';
+import { SystemPacketType, type ServerPacket } from '../../common/src/packets';
 import { GAME_DESCRIPTIONS } from './constants/gameDescriptions';
 import flappyBird1 from './assets/images/flappybird_1.png';
 import flappyBird2 from './assets/images/flappybird_2.png';
@@ -268,7 +264,7 @@ function AppContent() {
   }, []);
 
   // 닉네임 설정하고 시작 버튼 누를 때 동작
-  const handleStart = (inputNickname: string) => {
+  const handleStart = async (inputNickname: string) => {
     // todo 색상도 서버가 알아서 줌.
     // const userColor = PLAYER_COLORS[0]; // 처음 유저는 첫 번째 색상
     // // todo 이거 이렇게 할 필요없고 내가 그 방의 몇 번째인지만 관리해주면 될 것 같음. number로.
@@ -295,13 +291,14 @@ function AppContent() {
       }
     }
 
-    const joinRoomPacket: JoinRoomPacket = {
-      type: SystemPacketType.JOIN_ROOM,
-      roomId: roomId, // URL에서 추출한 roomId 또는 빈 문자열
-      playerName: inputNickname,
-    };
-    socketManager.send(joinRoomPacket);
-    console.log('JOIN_ROOM sent: ', joinRoomPacket);
+    try {
+      await socketManager.joinRoom(roomId, inputNickname);
+    } catch (error) {
+      useGameStore.getState().setConnectionError({
+        message:
+          error instanceof Error ? error.message : '방에 참가하지 못했습니다.',
+      });
+    }
   };
 
   const handleGameStart = (gameType: string, preset: unknown) => {

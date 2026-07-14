@@ -12,6 +12,7 @@ export type { PlayerData } from './common-type';
 export enum SystemPacketType {
   UPDATE_NUMBER = 'UPDATE_NUMBER',
   JOIN_ROOM = 'JOIN_ROOM',
+  JOIN_ACCEPTED = 'JOIN_ACCEPTED',
   ROOM_UPDATE = 'ROOM_UPDATE',
   SYSTEM_MESSAGE = 'SYSTEM_MESSAGE',
   GAME_CONFIG_UPDATE_REQ = 'GAME_CONFIG_UPDATE_REQ',
@@ -24,6 +25,7 @@ export enum SystemPacketType {
   REPLAY_REQ = 'REPLAY_REQ',
   SET_TIME = 'SET_TIME',
   TIME_END = 'TIME_END',
+  GAME_INTERRUPTED = 'GAME_INTERRUPTED',
 }
 
 export interface UpdateNumberPacket {
@@ -34,6 +36,22 @@ export interface JoinRoomPacket {
   type: SystemPacketType.JOIN_ROOM;
   roomId: string;
   playerName: string;
+  playerId?: string;
+  resumeToken?: string;
+}
+
+export interface JoinAcceptedPacket {
+  type: SystemPacketType.JOIN_ACCEPTED;
+  roomId: string;
+  playerId: string;
+  resumeToken: string;
+  resumed: boolean;
+}
+
+export interface GameInterruptedPacket {
+  type: SystemPacketType.GAME_INTERRUPTED;
+  reason: 'server_restart' | 'deployment' | 'player_left';
+  message: string;
 }
 
 export enum RoomUpdateType {
@@ -107,6 +125,8 @@ export interface TimeEndPacket {
 export type SystemPacket =
   | UpdateNumberPacket
   | JoinRoomPacket
+  | JoinAcceptedPacket
+  | GameInterruptedPacket
   | RoomUpdatePacket
   | SystemMessagePacket
   | GameConfigUpdateReqPacket
