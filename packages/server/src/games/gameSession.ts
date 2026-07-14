@@ -337,9 +337,6 @@ export class GameSession {
     }
 
     const playerIndex = this.getIndex(socket.id);
-    console.log(
-      `[GameSession] handleGamePacket 전달 - type: ${packet.type}, playerIndex: ${playerIndex}`,
-    );
     this.games.handlePacket(socket, playerIndex, packet);
   }
 

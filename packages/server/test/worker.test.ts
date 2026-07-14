@@ -16,6 +16,7 @@ import {
   getPredictionFrames,
   getSmoothingAlpha,
 } from '../../client/src/game/scene/flappybirds/interpolation';
+import { FixedStepClock } from '../src/games/instances/fixedStepClock';
 
 interface Packet {
   type: string;
@@ -262,5 +263,25 @@ describe('Flappy rendering interpolation', () => {
     const oneFrame = getSmoothingAlpha(1000 / 60);
     const twoFrames = 1 - (1 - oneFrame) ** 2;
     expect(getSmoothingAlpha(1000 / 30)).toBeCloseTo(twoFrames, 5);
+  });
+});
+
+describe('Flappy fixed-step scheduling', () => {
+  it('runs three 60Hz physics steps for each 20Hz network interval', () => {
+    const clock = new FixedStepClock(1000 / 60, 6);
+    clock.reset(1_000);
+
+    expect(clock.advance(1_050)).toEqual({ steps: 3, droppedMs: 0 });
+    expect(clock.advance(1_100)).toEqual({ steps: 3, droppedMs: 0 });
+  });
+
+  it('caps catch-up work after a long runtime stall', () => {
+    const clock = new FixedStepClock(1000 / 60, 6);
+    clock.reset(1_000);
+
+    const result = clock.advance(1_500);
+    expect(result.steps).toBe(6);
+    expect(result.droppedMs).toBeCloseTo(400, 5);
+    expect(clock.advance(1_550).steps).toBe(3);
   });
 });

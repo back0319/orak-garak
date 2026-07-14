@@ -88,6 +88,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
   // 밧줄
   private ropes: Phaser.GameObjects.Graphics[] = [];
   private ropeMidPoints: { y: number; vy: number }[] = []; // 밧줄 중간 지점의 관성 데이터
+  private ropePoints: { x: number; y: number }[][] = [];
   private ropeConnections: [number, number][] = []; // 밧줄 연결 쌍 (새 인덱스)
   private gameStarted: boolean = false; // 게임 시작 여부 (1초 딜레이 동기화)
   private isGameOver: boolean = false; // 게임 오버 여부
@@ -153,6 +154,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     this.lastSnapshotReceivedAt = 0;
     this.ropes = [];
     this.ropeMidPoints = [];
+    this.ropePoints = [];
     this.targetPipes = [];
     this.pipesDirty = false;
     this.currentScore = 0;
@@ -551,6 +553,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     this.targetPositions = [];
     this.lastSnapshotReceivedAt = 0;
     this.ropeMidPoints = []; // 밧줄 관성 데이터 초기화 (누행 방지)
+    this.ropePoints = [];
     this.isGameOver = false; // 상태 초기화
 
     // 새 생성
@@ -763,6 +766,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
 
       // 초기 관성 데이터 초기화
       this.ropeMidPoints.push({ y: 300, vy: 0 });
+      this.ropePoints.push(Array.from({ length: 17 }, () => ({ x: 0, y: 0 })));
     }
 
     console.log(
@@ -982,8 +986,6 @@ export default class FlappyBirdsScene extends Phaser.Scene {
 
     // React로 점프 사운드 재생 이벤트 전달
     this.events.emit('flappyJump');
-
-    console.log(`[FlappyBirdsScene] Bird ${playerId} Flap!`);
   }
 
   /**
@@ -1073,7 +1075,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     // 게임 오버 시에도 밧줄은 새 위치에 맞게 그려야 함 (비활성 탭에서 복귀 시 동기화)
     if (this.isGameOver) {
       // 밧줄만 새 스프라이트 위치에 맞게 그리기
-      this.drawRopesFromSprites();
+      this.drawRopesFromSprites(delta);
       return;
     }
 
@@ -1093,7 +1095,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       this.cameras.main.scrollX = Phaser.Math.Linear(
         this.cameras.main.scrollX,
         targetCameraX,
-        0.1,
+        getSmoothingAlpha(delta, 6.32),
       );
 
       // 지면 스크롤 (카메라 위치에 동기화)
@@ -1123,14 +1125,15 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     this.pipeManager?.update(delta);
 
     // 밧줄을 클라이언트 측 새 스프라이트 위치로 직접 그리기 (레이턴시 없음)
-    this.drawRopesFromSprites();
+    this.drawRopesFromSprites(delta);
   }
 
   /**
    * 클라이언트 측 새 스프라이트 위치 및 관성을 이용한 밧줄 그리기 (느슨할 때만 처짐)
    */
-  private drawRopesFromSprites() {
+  private drawRopesFromSprites(deltaMs = 1000 / 60) {
     const ratio = this.getRatio();
+    const frameScale = Math.min(2, Math.max(0.25, deltaMs / (1000 / 60)));
     const GRAVITY = 1.5 * ratio; // 밧줄의 자체 중력
     const STIFFNESS = 0.3; // 밧줄 관성 복원력
     const DAMPING = 0.8; // 진동 감춴
@@ -1142,8 +1145,9 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       const birdA = this.birdSprites[indexA];
       const birdB = this.birdSprites[indexB];
       const midPoint = this.ropeMidPoints[i];
+      const points = this.ropePoints[i];
 
-      if (birdA && birdB && midPoint) {
+      if (birdA && birdB && midPoint && points) {
         const distance = Phaser.Math.Distance.Between(
           birdA.x,
           birdA.y,
@@ -1169,20 +1173,28 @@ export default class FlappyBirdsScene extends Phaser.Scene {
 
         // 3. 관성 물리 시뮬레이션
         const ay = (targetMidY - midPoint.y) * STIFFNESS + GRAVITY;
-        midPoint.vy = (midPoint.vy + ay) * DAMPING;
-        midPoint.y += midPoint.vy;
+        midPoint.vy =
+          (midPoint.vy + ay * frameScale) * Math.pow(DAMPING, frameScale);
+        midPoint.y += midPoint.vy * frameScale;
 
         rope.clear();
         rope.lineStyle(6 * ratio, 0x8b4513, 0.9); // 고전적인 갈색 밧줄
 
-        // 2차 베지어 곡선을 사용하여 부드러운 처짐 표현
-        const curve = new Phaser.Curves.QuadraticBezier(
-          new Phaser.Math.Vector2(birdA.x, birdA.y),
-          new Phaser.Math.Vector2(targetMidX, midPoint.y),
-          new Phaser.Math.Vector2(birdB.x, birdB.y),
-        );
-
-        const points = curve.getPoints(16);
+        // 점 객체를 매 프레임 생성하지 않고 미리 할당한 배열을 갱신한다.
+        const lastPointIndex = points.length - 1;
+        for (let pointIndex = 0; pointIndex <= lastPointIndex; pointIndex++) {
+          const t = pointIndex / lastPointIndex;
+          const inverseT = 1 - t;
+          const point = points[pointIndex];
+          point.x =
+            inverseT * inverseT * birdA.x +
+            2 * inverseT * t * targetMidX +
+            t * t * birdB.x;
+          point.y =
+            inverseT * inverseT * birdA.y +
+            2 * inverseT * t * midPoint.y +
+            t * t * birdB.y;
+        }
         rope.strokePoints(points);
       }
     }

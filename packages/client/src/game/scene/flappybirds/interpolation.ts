@@ -7,7 +7,10 @@ export function getPredictionFrames(snapshotAgeMs: number): number {
   return boundedAge / SERVER_PHYSICS_FRAME_MS;
 }
 
-export function getSmoothingAlpha(deltaMs: number): number {
+export function getSmoothingAlpha(
+  deltaMs: number,
+  responseRate = POSITION_RESPONSE_RATE,
+): number {
   const boundedDelta = Math.min(50, Math.max(0, deltaMs));
-  return 1 - Math.exp((-POSITION_RESPONSE_RATE * boundedDelta) / 1000);
+  return 1 - Math.exp((-responseRate * boundedDelta) / 1000);
 }
