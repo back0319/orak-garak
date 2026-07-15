@@ -237,6 +237,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
   }
 
   private setupStartCountdownEventListener(): void {
+    let startDisplayMs = 500;
     const activateGameStart = () => {
       if (!this.sys?.isActive() || this.gameStarted) return;
       if (this.countdownTimer !== undefined) {
@@ -248,7 +249,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       socketManager.send({
         type: FlappyBirdPacketType.FLAPPY_GAME_START_ACK,
       });
-      this.time.delayedCall(300, () => {
+      this.time.delayedCall(startDisplayMs, () => {
         this.countdownText?.destroy();
         this.countdownText = undefined;
       });
@@ -307,7 +308,11 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       }, countdownMs ?? Math.max(0, startsAt - Date.now()));
     };
 
-    const handleGameStart = () => {
+    const handleGameStart = (event: Event) => {
+      const { inputGraceMs } = (
+        event as CustomEvent<{ inputGraceMs?: number }>
+      ).detail;
+      startDisplayMs = inputGraceMs ?? startDisplayMs;
       activateGameStart();
     };
 

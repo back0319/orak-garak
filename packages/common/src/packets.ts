@@ -264,6 +264,8 @@ export interface FlappyGameStartPacket {
   type: FlappyBirdPacketType.FLAPPY_GAME_START;
   /** 구버전 클라이언트가 ACK하지 않을 때 사용하는 안전 타임아웃 */
   ackTimeoutMs: number;
+  /** 입력을 먼저 받을 수 있도록 ACK 완료 후 물리를 멈춰 두는 시간 */
+  inputGraceMs: number;
 }
 
 export interface FlappyGameStartAckPacket {

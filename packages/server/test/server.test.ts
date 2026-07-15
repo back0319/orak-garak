@@ -165,7 +165,10 @@ describe('Socket.IO game server', () => {
       socket,
       FlappyBirdPacketType.FLAPPY_START_COUNTDOWN,
     );
-    const gameStart = waitForEvent<{ ackTimeoutMs: number }>(
+    const gameStart = waitForEvent<{
+      ackTimeoutMs: number;
+      inputGraceMs: number;
+    }>(
       socket,
       FlappyBirdPacketType.FLAPPY_GAME_START,
     );
@@ -174,13 +177,16 @@ describe('Socket.IO game server', () => {
     expect(startsAt - Date.now()).toBeGreaterThan(800);
     expect(countdownMs).toBe(1000);
 
-    const { ackTimeoutMs } = await gameStart;
+    const { ackTimeoutMs, inputGraceMs } = await gameStart;
     expect(ackTimeoutMs).toBe(1000);
+    expect(inputGraceMs).toBe(500);
     expect(worldPackets).toBe(0);
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(worldPackets).toBe(0);
 
     socket.emit(FlappyBirdPacketType.FLAPPY_GAME_START_ACK, {});
+    await new Promise((resolve) => setTimeout(resolve, inputGraceMs / 2));
+    expect(worldPackets).toBe(0);
 
     await waitForEvent(
       socket,
@@ -335,7 +341,10 @@ describe('Socket.IO game server', () => {
       host,
       FlappyBirdPacketType.FLAPPY_START_COUNTDOWN,
     );
-    const gameStart = waitForEvent<{ ackTimeoutMs: number }>(
+    const gameStart = waitForEvent<{
+      ackTimeoutMs: number;
+      inputGraceMs: number;
+    }>(
       host,
       FlappyBirdPacketType.FLAPPY_GAME_START,
     );
@@ -344,7 +353,7 @@ describe('Socket.IO game server', () => {
     expect(countdownPacket.startsAt - Date.now()).toBeGreaterThan(800);
     expect(countdownPacket.countdownMs).toBe(1000);
 
-    await gameStart;
+    const { inputGraceMs } = await gameStart;
     host.emit(FlappyBirdPacketType.FLAPPY_GAME_START_ACK, {});
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(worldPackets).toBe(0);
@@ -354,6 +363,8 @@ describe('Socket.IO game server', () => {
       FlappyBirdPacketType.FLAPPY_WORLD_STATE,
     );
     guest.emit(FlappyBirdPacketType.FLAPPY_GAME_START_ACK, {});
+    await new Promise((resolve) => setTimeout(resolve, inputGraceMs / 2));
+    expect(worldPackets).toBe(0);
     await firstWorldState;
     expect(worldPackets).toBeGreaterThan(0);
   });

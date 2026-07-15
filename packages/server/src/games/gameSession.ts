@@ -25,6 +25,7 @@ import { MineSweeperInstance } from './instances/MineSweeperInstance';
 export class GameSession {
   private static readonly FLAPPY_COUNTDOWN_MS = 1_000;
   private static readonly FLAPPY_START_ACK_TIMEOUT_MS = 1_000;
+  private static readonly FLAPPY_INPUT_GRACE_MS = 500;
   // selected game in this session (lobby choice)
   public selectedGameType: GameType = GameType.APPLE_GAME;
   // 게임 인스턴스 (현재 활성화된 게임)
@@ -417,11 +418,12 @@ export class GameSession {
             this.broadcastPacket({
               type: FlappyBirdPacketType.FLAPPY_GAME_START,
               ackTimeoutMs,
+              inputGraceMs: GameSession.FLAPPY_INPUT_GRACE_MS,
             });
 
             // 캐시된 구버전 클라이언트가 ACK하지 않는 경우에도 방이 멈추지 않게 한다.
             this.flappyCountdownTimeout = setTimeout(() => {
-              this.startFlappyPhysics();
+              this.startFlappyPhysics(0);
             }, ackTimeoutMs);
           }, countdownMs);
         } else {
@@ -444,7 +446,9 @@ export class GameSession {
       const everyoneAcknowledged = Array.from(this.players.keys()).every((id) =>
         this.flappyStartAcknowledgedPlayers.has(id),
       );
-      if (everyoneAcknowledged) this.startFlappyPhysics();
+      if (everyoneAcknowledged) {
+        this.startFlappyPhysics(GameSession.FLAPPY_INPUT_GRACE_MS);
+      }
       return;
     }
 
@@ -465,14 +469,17 @@ export class GameSession {
     this.flappyStartAcknowledgedPlayers.clear();
   }
 
-  private startFlappyPhysics(): void {
+  private startFlappyPhysics(inputGraceMs: number): void {
     if (!this.waitingForFlappyStartAcks) return;
     this.waitingForFlappyStartAcks = false;
     if (this.flappyCountdownTimeout) {
       clearTimeout(this.flappyCountdownTimeout);
       this.flappyCountdownTimeout = null;
     }
-    if (this.status === 'playing') this.games?.start();
+    this.flappyCountdownTimeout = setTimeout(() => {
+      this.flappyCountdownTimeout = null;
+      if (this.status === 'playing') this.games?.start();
+    }, inputGraceMs);
   }
 
   public broadcastPacket(packet: ServerPacket) {
