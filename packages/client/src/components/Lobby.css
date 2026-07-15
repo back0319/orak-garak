@@ -765,6 +765,10 @@
     font-size: 13px;
   }
 
+  .button-tooltip.invite-tooltip {
+    display: none;
+  }
+
   .lobby-sound-setting {
     display: none;
   }

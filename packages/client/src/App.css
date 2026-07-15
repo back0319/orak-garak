@@ -215,6 +215,10 @@
   min-height: 44px;
 }
 
+.game-screen:has(.game-result-overlay) .sound-setting-container {
+  display: none;
+}
+
 @media (orientation: landscape) and (max-height: 500px) {
   .game-hud {
     top: max(3px, env(safe-area-inset-top));
