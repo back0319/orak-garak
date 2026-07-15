@@ -27,7 +27,7 @@ env:
   IMAGE: ghcr.io/back0319/orak-garak-server:${{ github.sha }}
 
 jobs:
-  verify-and-deploy:
+  verify-and-publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +59,13 @@ jobs:
           tags: |
             ${{ env.IMAGE }}
             ghcr.io/back0319/orak-garak-server:latest
+
+  deploy-azure:
+    if: github.ref == 'refs/heads/main'
+    needs: verify-and-publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: azure/login@v2
         with:
