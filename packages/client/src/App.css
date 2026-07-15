@@ -88,8 +88,8 @@
   pointer-events: none;
 }
 
-/* 사과게임과 지뢰찾기는 상단 타일/격자도 플레이 영역이다. HUD를 일반
-   레이아웃에 포함해 캔버스가 그 아래 남은 높이만 사용하도록 한다. */
+/* 모든 게임의 점수판을 캔버스와 분리한다. HUD를 일반 레이아웃에 포함해
+   캔버스가 그 아래 남은 높이만 사용하도록 한다. */
 .game-screen--reserved-hud .game-hud {
   position: relative;
   inset: auto;
