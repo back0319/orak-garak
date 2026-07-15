@@ -97,6 +97,20 @@
 }
 
 @media (orientation: landscape) and (max-height: 500px) {
+  .github-link {
+    top: max(8px, env(safe-area-inset-top));
+    right: max(8px, env(safe-area-inset-right));
+    color: #212529;
+    background: rgba(255, 255, 255, 0.92);
+  }
+
+  .github-link:hover,
+  .github-link:focus-visible {
+    color: #212529;
+    background: white;
+    outline-color: #212529;
+  }
+
   .landing-container {
     align-items: center;
     padding-top: max(10px, env(safe-area-inset-top));
