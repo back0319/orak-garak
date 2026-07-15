@@ -297,6 +297,31 @@ describe('Flappy client render simulation', () => {
     expect(second.y).toBeGreaterThan(firstY);
   });
 
+  it('samples motion on every high-refresh render frame', () => {
+    const simulation = new FlappyRenderSimulation();
+    simulation.reset([bird({ velocityY: -8 })], 0);
+
+    const firstY = simulation.update(1000 / 120, 1000 / 120)[0].y;
+    const secondY = simulation.update(1000 / 120, 1000 / 60)[0].y;
+    const thirdY = simulation.update(1000 / 120, 1000 / 40)[0].y;
+
+    expect(firstY).toBeLessThan(200);
+    expect(secondY).toBeLessThan(firstY);
+    expect(thirdY).toBeLessThan(secondY);
+  });
+
+  it('does not freeze when a 20Hz snapshot is briefly delayed', () => {
+    const simulation = new FlappyRenderSimulation();
+    simulation.reset([bird()], 0);
+    simulation.applySnapshot(0, [bird()], [0], 0, 0, true);
+
+    const at100ms = simulation.update(100, 100)[0].x;
+    const at150ms = simulation.update(50, 150)[0].x;
+
+    expect(at100ms).toBeGreaterThan(100);
+    expect(at150ms).toBeGreaterThan(at100ms);
+  });
+
   it('applies the local jump before the next server packet arrives', () => {
     const simulation = new FlappyRenderSimulation();
     simulation.reset([bird()], 0);

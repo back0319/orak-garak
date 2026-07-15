@@ -44,6 +44,7 @@ function nowMs(): number {
  */
 export class FlappyRenderSimulation {
   private renderBirds: SimulatedBird[] = [];
+  private displayBirds: SimulatedBird[] = [];
   private guideBirds: SimulatedBird[] = [];
   private previousSnapshot: BirdPosition[] = [];
   private previousTick: number | null = null;
@@ -56,6 +57,7 @@ export class FlappyRenderSimulation {
 
   reset(birds: BirdPosition[] = [], tick: number | null = null): void {
     this.renderBirds = birds.map((bird) => cloneBird(bird));
+    this.displayBirds = birds.map((bird) => cloneBird(bird));
     this.guideBirds = birds.map((bird) => cloneBird(bird));
     this.previousSnapshot = birds.map((bird) => ({ ...bird }));
     this.previousTick = tick;
@@ -84,6 +86,7 @@ export class FlappyRenderSimulation {
     const mustReset =
       force ||
       this.renderBirds.length !== birds.length ||
+      this.displayBirds.length !== birds.length ||
       this.guideBirds.length !== birds.length;
 
     this.localPlayerIndex = localPlayerIndex;
@@ -95,6 +98,7 @@ export class FlappyRenderSimulation {
       const predictionFrames = this.getPredictionFrames(tick, receivedAt);
       for (const bird of predicted) integrate(bird, predictionFrames);
       this.renderBirds = predicted.map((bird) => ({ ...bird }));
+      this.displayBirds = predicted.map((bird) => ({ ...bird }));
       this.guideBirds = predicted.map((bird) => ({ ...bird }));
       this.previousSnapshot = birds.map((bird) => ({ ...bird }));
       this.previousTick = tick;
@@ -143,6 +147,7 @@ export class FlappyRenderSimulation {
       const error = Math.hypot(authority.x - render.x, authority.y - render.y);
       if (error > HARD_SNAP_DISTANCE || networkGap > NETWORK_STALL_MS) {
         Object.assign(render, authority);
+        Object.assign(this.displayBirds[index], authority);
       }
     }
 
@@ -156,13 +161,18 @@ export class FlappyRenderSimulation {
     velocityY: number,
   ): void {
     const render = this.renderBirds[playerIndex];
+    const display = this.displayBirds[playerIndex];
     const guide = this.guideBirds[playerIndex];
-    if (!render || !guide || !Number.isSafeInteger(inputSeq)) return;
+    if (!render || !display || !guide || !Number.isSafeInteger(inputSeq))
+      return;
 
     this.localPlayerIndex = playerIndex;
     this.latestLocalInputSeq = Math.max(this.latestLocalInputSeq, inputSeq);
     render.velocityY = velocityY;
     render.angle = -30;
+    display.y = render.y;
+    display.velocityY = velocityY;
+    display.angle = -30;
     guide.y = render.y;
     guide.velocityY = velocityY;
     guide.angle = -30;
@@ -174,8 +184,9 @@ export class FlappyRenderSimulation {
       this.accumulatorMs = 0;
       for (let index = 0; index < this.renderBirds.length; index++) {
         Object.assign(this.renderBirds[index], this.guideBirds[index]);
+        Object.assign(this.displayBirds[index], this.guideBirds[index]);
       }
-      return this.renderBirds;
+      return this.displayBirds;
     }
 
     this.accumulatorMs += Math.min(
@@ -193,11 +204,12 @@ export class FlappyRenderSimulation {
     }
 
     if (steps === MAX_CATCH_UP_STEPS) this.accumulatorMs = 0;
-    return this.renderBirds;
+    this.sampleDisplay(currentTime);
+    return this.displayBirds;
   }
 
   getBirds(): readonly BirdPosition[] {
-    return this.renderBirds;
+    return this.displayBirds;
   }
 
   private step(deltaMs: number, currentTime: number): void {
@@ -214,22 +226,66 @@ export class FlappyRenderSimulation {
       const render = this.renderBirds[index];
       const guide = this.guideBirds[index];
       const isLocal = index === this.localPlayerIndex;
-      const mayExtrapolate =
-        snapshotAge <= MAX_EXTRAPOLATION_MS || (isLocal && localInputPending);
+      const protectsLocalJump = isLocal && localInputPending;
+      const renderMayAdvance =
+        this.lastSnapshotReceivedAt === null ||
+        snapshotAge <= NETWORK_STALL_MS ||
+        protectsLocalJump;
+      const guideMayAdvance =
+        this.lastSnapshotReceivedAt === null ||
+        snapshotAge <= MAX_EXTRAPOLATION_MS ||
+        protectsLocalJump;
 
-      if (mayExtrapolate) {
-        integrate(render);
-        integrate(guide);
+      if (renderMayAdvance) integrate(render);
+      if (guideMayAdvance) integrate(guide);
+
+      // 패킷이 잠깐 늦을 때 guide를 멈춘 좌표로 끌어당기면 100ms마다
+      // 화면이 멎어 보인다. 신선한 guide에 대해서만 보정하고, 그 사이에는
+      // 마지막 속도로 계속 그린 뒤 다음 스냅샷에서 부드럽게 복귀한다.
+      if (guideMayAdvance) {
+        render.x += (guide.x - render.x) * positionAlpha;
+        render.velocityX +=
+          (guide.velocityX - render.velocityX) * positionAlpha;
+
+        if (!protectsLocalJump) {
+          render.y += (guide.y - render.y) * positionAlpha;
+          render.velocityY +=
+            (guide.velocityY - render.velocityY) * positionAlpha;
+          render.angle += (guide.angle - render.angle) * angleAlpha;
+        }
       }
+    }
+  }
 
-      render.x += (guide.x - render.x) * positionAlpha;
-      render.velocityX += (guide.velocityX - render.velocityX) * positionAlpha;
+  /**
+   * 고정 물리 스텝 사이의 남은 시간을 화면 전용 상태에 외삽한다.
+   * 시뮬레이션 판정에는 영향을 주지 않으면서 60/120Hz RAF 모두에서
+   * 매 렌더 프레임 좌표가 연속적으로 변한다.
+   */
+  private sampleDisplay(currentTime: number): void {
+    const snapshotAge =
+      this.lastSnapshotReceivedAt === null
+        ? 0
+        : currentTime - this.lastSnapshotReceivedAt;
+    const localInputPending =
+      this.lastAckedLocalInputSeq < this.latestLocalInputSeq;
+    const frameFraction = Math.min(
+      1,
+      Math.max(0, this.accumulatorMs / PHYSICS_FRAME_MS),
+    );
 
-      if (!isLocal || !localInputPending) {
-        render.y += (guide.y - render.y) * positionAlpha;
-        render.velocityY +=
-          (guide.velocityY - render.velocityY) * positionAlpha;
-        render.angle += (guide.angle - render.angle) * angleAlpha;
+    for (let index = 0; index < this.renderBirds.length; index++) {
+      const display = this.displayBirds[index];
+      const render = this.renderBirds[index];
+      Object.assign(display, render);
+
+      const isLocal = index === this.localPlayerIndex;
+      const mayPreview =
+        this.lastSnapshotReceivedAt === null ||
+        snapshotAge <= NETWORK_STALL_MS ||
+        (isLocal && localInputPending);
+      if (mayPreview && frameFraction > 0) {
+        integrate(display, frameFraction);
       }
     }
   }

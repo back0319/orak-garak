@@ -177,7 +177,9 @@ export const GameContainer: React.FC<GameContainerProps> = ({
       fps:
         gameType === GameType.FLAPPY_BIRD
           ? {
-              target: 60,
+              // 고주사율 화면에서는 RAF마다 화면 전용 보간값을 그린다.
+              // 실제 클라이언트 물리는 FlappyRenderSimulation에서 60Hz로 유지된다.
+              target: 120,
               smoothStep: false,
               panicMax: 8,
             }
