@@ -28,6 +28,14 @@ body {
   place-items: center;
   min-width: 320px;
   min-height: 100vh;
+  min-height: 100dvh;
+  width: 100%;
+  overflow: hidden;
+}
+
+#root {
+  width: 100%;
+  min-height: 100dvh;
 }
 
 h1 {

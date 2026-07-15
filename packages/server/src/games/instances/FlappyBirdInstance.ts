@@ -62,6 +62,7 @@ export class FlappyBirdInstance implements GameInstance {
 
   // 플레이어 추적
   private lastFlapTime: Map<number, number> = new Map();
+  private lastProcessedInputSeqs: number[] = [];
 
   // 밧줄 물리
   private ropeConnections: [number, number][] = [];
@@ -106,6 +107,7 @@ export class FlappyBirdInstance implements GameInstance {
   initialize(config: FlappyBirdGamePreset): void {
     // 프리셋을 실제 값으로 변환
     const resolved = resolveFlappyBirdPreset(config);
+    const playerCount = this.session.players.size;
 
     // 기존 객체 제거
     Matter.World.clear(this.world, false);
@@ -116,6 +118,7 @@ export class FlappyBirdInstance implements GameInstance {
     this.pipes = [];
     this.nextPipeId = 0;
     this.lastFlapTime.clear();
+    this.lastProcessedInputSeqs = Array.from({ length: playerCount }, () => 0);
     this.physicsTick = 0;
 
     // 설정 적용
@@ -136,7 +139,6 @@ export class FlappyBirdInstance implements GameInstance {
     this.createGround();
 
     // 플레이어 수만큼 새 생성
-    const playerCount = this.session.players.size;
     this.createBirds(playerCount);
 
     // 밧줄 연결 쌍 계산
@@ -181,6 +183,7 @@ export class FlappyBirdInstance implements GameInstance {
     this.isGameOverState = false;
     this.ground = null;
     this.lastFlapTime.clear();
+    this.lastProcessedInputSeqs = [];
 
     Matter.World.clear(this.world, false);
     Matter.Engine.clear(this.engine);
@@ -201,7 +204,7 @@ export class FlappyBirdInstance implements GameInstance {
   handlePacket(socket: GameSocket, playerIndex: number, packet: any): void {
     switch (packet.type) {
       case FlappyBirdPacketType.FLAPPY_JUMP:
-        this.handleJump(playerIndex);
+        this.handleJump(playerIndex, packet.inputSeq);
         break;
       case FlappyBirdPacketType.FLAPPY_REQUEST_SYNC:
         this.handleSyncRequest(socket);
@@ -250,6 +253,7 @@ export class FlappyBirdInstance implements GameInstance {
       cameraX,
       score: this.score,
       isGameOver: this.isGameOverState,
+      lastProcessedInputSeqs: [...this.lastProcessedInputSeqs],
       gameOverData: this.lastGameOverData ?? undefined,
     };
 
@@ -657,8 +661,13 @@ export class FlappyBirdInstance implements GameInstance {
 
   // ========== 입력 처리 ==========
 
-  private handleJump(playerIndex: number): void {
+  private handleJump(playerIndex: number, inputSeq: unknown): void {
     if (this.isGameOverState) return;
+
+    if (!Number.isSafeInteger(inputSeq) || (inputSeq as number) <= 0) return;
+
+    const sequence = inputSeq as number;
+    if (sequence <= (this.lastProcessedInputSeqs[playerIndex] ?? 0)) return;
 
     if (playerIndex >= 0 && playerIndex < this.birds.length) {
       const bird = this.birds[playerIndex];
@@ -680,6 +689,7 @@ export class FlappyBirdInstance implements GameInstance {
       });
 
       Matter.Body.setAngularVelocity(bird, 0);
+      this.lastProcessedInputSeqs[playerIndex] = sequence;
     }
   }
 
@@ -768,6 +778,7 @@ export class FlappyBirdInstance implements GameInstance {
       birds,
       pipes,
       cameraX,
+      lastProcessedInputSeqs: [...this.lastProcessedInputSeqs],
     };
 
     this.session.broadcastPacket(worldStatePacket);

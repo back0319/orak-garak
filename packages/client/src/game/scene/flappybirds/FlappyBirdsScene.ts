@@ -77,6 +77,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
   private birdSprites: Phaser.GameObjects.Sprite[] = [];
   private targetPositions: BirdPosition[] = [];
   private renderSimulation = new FlappyRenderSimulation();
+  private nextInputSeq = 1;
 
   // 바닥 (무한 스크롤용)
   private groundTile!: Phaser.GameObjects.TileSprite;
@@ -162,6 +163,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     this.gameStarted = false;
     this.isGameOver = false;
     this.pendingGameOverFromSync = false;
+    this.nextInputSeq = 1;
 
     this.editorCreate();
 
@@ -203,6 +205,10 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       // 서버에서 플레이어 인덱스 가져오기
       const store = useGameStore.getState();
       this.myPlayerId = String(store.myselfIndex) as PlayerId;
+      this.nextInputSeq = Math.max(
+        1,
+        (store.flappyLastProcessedInputSeqs[store.myselfIndex] ?? 0) + 1,
+      );
       this.playerCount = store.players.length || 4;
       this.playerNames = store.players.map(
         (p, i) => p.playerName || `Player ${i + 1}`,
@@ -276,6 +282,9 @@ export default class FlappyBirdsScene extends Phaser.Scene {
         this.renderSimulation.applySnapshot(
           packet.tick ?? 0,
           this.targetPositions,
+          packet.lastProcessedInputSeqs ?? [],
+          Number(this.myPlayerId),
+          performance.now(),
         );
       }
 
@@ -414,6 +423,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
         isGameOver: state.isFlappyGameOver,
         gameOverData: state.flappyGameOverData,
         tick: state.flappyServerTick,
+        lastProcessedInputSeqs: state.flappyLastProcessedInputSeqs,
       }),
       (current, previous) => {
         // pendingGameOverFromSync 상태에서 birds 데이터가 도착하면 게임 오버 처리
@@ -460,6 +470,10 @@ export default class FlappyBirdsScene extends Phaser.Scene {
           current.birds.length > 0 &&
           !this.isGameOver
         ) {
+          this.nextInputSeq = Math.max(
+            this.nextInputSeq,
+            (current.lastProcessedInputSeqs[Number(this.myPlayerId)] ?? 0) + 1,
+          );
           this.targetPositions = current.birds.map((bird, index) => ({
             playerId: String(index) as PlayerId,
             x: bird.x,
@@ -471,6 +485,9 @@ export default class FlappyBirdsScene extends Phaser.Scene {
           this.renderSimulation.applySnapshot(
             current.tick,
             this.targetPositions,
+            current.lastProcessedInputSeqs,
+            Number(this.myPlayerId),
+            performance.now(),
           );
         }
 
@@ -917,6 +934,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
 
     // 스페이스바 (내 새)
     this.input.keyboard?.on('keydown-SPACE', (e: KeyboardEvent) => {
+      e.preventDefault();
       onKeydown(e, this.myPlayerId);
     });
 
@@ -973,28 +991,29 @@ export default class FlappyBirdsScene extends Phaser.Scene {
         timestamp: Date.now(),
       });
     } else {
-      // 실제 서버 모드: FLAPPY_JUMP 패킷 전송
-      // 서버는 socket.id로 playerIndex를 결정하므로 playerId 전송 불필요
-      const jumpPacket: FlappyJumpPacket = {
-        type: FlappyBirdPacketType.FLAPPY_JUMP,
-        timestamp: Date.now(),
-      };
-      socketManager.send(jumpPacket);
-
-      // 서버 판정은 그대로 유지하되 내 새는 즉시 점프한 것처럼 보여준다.
-      // 다음 20Hz 권위 스냅샷이 오면 자연스럽게 실제 위치로 보정된다.
       const playerIndex = Number(this.myPlayerId);
+      const inputSeq = this.nextInputSeq++;
+
+      // 입력 프레임에 먼저 로컬 물리를 반영한다. 네트워크와 사운드는 그 뒤다.
+      this.renderSimulation.applyLocalJump(
+        playerIndex,
+        inputSeq,
+        FLAPPY_PHYSICS.FLAP_VELOCITY,
+      );
       const target = this.targetPositions[playerIndex];
       const sprite = this.birdSprites[playerIndex];
       if (target && sprite) {
         target.y = sprite.y / this.getRatio();
         target.velocityY = FLAPPY_PHYSICS.FLAP_VELOCITY;
         target.angle = -30;
-        this.renderSimulation.applyLocalJump(
-          playerIndex,
-          FLAPPY_PHYSICS.FLAP_VELOCITY,
-        );
       }
+
+      const jumpPacket: FlappyJumpPacket = {
+        type: FlappyBirdPacketType.FLAPPY_JUMP,
+        timestamp: Date.now(),
+        inputSeq,
+      };
+      socketManager.send(jumpPacket);
     }
 
     // React로 점프 사운드 재생 이벤트 전달
@@ -1042,9 +1061,10 @@ export default class FlappyBirdsScene extends Phaser.Scene {
   update(_time: number, delta: number) {
     // 서버는 판정을 담당하고, 클라이언트는 스냅샷 사이를 60Hz로 시뮬레이션한다.
     const ratio = this.getRatio();
-    const renderPositions = isMockMode() || this.isGameOver
-      ? this.targetPositions
-      : this.renderSimulation.update(delta);
+    const renderPositions =
+      isMockMode() || this.isGameOver
+        ? this.targetPositions
+        : this.renderSimulation.update(delta);
     const smoothingAlpha = getSmoothingAlpha(delta);
     for (let i = 0; i < this.birdSprites.length; i++) {
       const sprite = this.birdSprites[i];
@@ -1133,8 +1153,6 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       this.pipeManager.updateFromServer(scaledPipes);
       this.pipesDirty = false;
     }
-    this.pipeManager?.update(delta);
-
     // 밧줄을 클라이언트 측 새 스프라이트 위치로 직접 그리기 (레이턴시 없음)
     this.drawRopesFromSprites(delta);
   }

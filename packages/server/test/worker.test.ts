@@ -3,15 +3,17 @@ import { evictDurableObject, runDurableObjectAlarm } from 'cloudflare:test';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   GameType,
+  FlappyBirdPacketType,
   RoomUpdateType,
   SystemPacketType,
+  getDefaultConfig,
   type GameConfig,
 } from '@main-game/common';
 import {
   GameSession,
   type PersistedGameSession,
 } from '../src/games/gameSession';
-import type { GameTransport } from '../src/network/transport';
+import type { GameSocket, GameTransport } from '../src/network/transport';
 import {
   getPredictionFrames,
   getSmoothingAlpha,
@@ -19,6 +21,7 @@ import {
 import { FlappyRenderSimulation } from '../../client/src/game/scene/flappybirds/FlappyRenderSimulation';
 import type { BirdPosition } from '../../client/src/game/types/flappybird.types';
 import { FixedStepClock } from '../src/games/instances/fixedStepClock';
+import { FlappyBirdInstance } from '../src/games/instances/FlappyBirdInstance';
 
 interface Packet {
   type: string;
@@ -296,7 +299,7 @@ describe('Flappy client render simulation', () => {
   it('applies the local jump before the next server packet arrives', () => {
     const simulation = new FlappyRenderSimulation();
     simulation.reset([bird()], 0);
-    simulation.applyLocalJump(0, -10);
+    simulation.applyLocalJump(0, 1, -10);
 
     const next = simulation.update(1000 / 60)[0];
     expect(next.y).toBeLessThan(200);
@@ -308,12 +311,101 @@ describe('Flappy client render simulation', () => {
     simulation.reset([bird()], 0);
     simulation.update(1000 / 60);
 
-    simulation.applySnapshot(3, [bird({ x: 110, y: 205 })]);
+    simulation.applySnapshot(3, [bird({ x: 110, y: 205 })], [0], 0, 50);
     expect(simulation.getBirds()[0].x).not.toBe(110);
 
-    simulation.applySnapshot(6, [bird({ x: 500, y: 500 })]);
+    simulation.applySnapshot(6, [bird({ x: 500, y: 500 })], [0], 0, 100);
     expect(simulation.getBirds()[0].x).toBe(500);
     expect(simulation.getBirds()[0].y).toBe(500);
+  });
+
+  it('does not let a stale ack cancel a newer local jump', () => {
+    const simulation = new FlappyRenderSimulation();
+    simulation.reset([bird()], 0);
+    simulation.applyLocalJump(0, 2, -10);
+    simulation.update(1000 / 60, 16.67);
+
+    simulation.applySnapshot(3, [bird({ y: 202, velocityY: 1 })], [1], 0, 50);
+    const afterStaleAck = simulation.update(1000 / 60, 66.67)[0];
+    expect(afterStaleAck.velocityY).toBeLessThan(0);
+    expect(afterStaleAck.y).toBeLessThan(200);
+  });
+
+  it('smoothly converges once the latest local input is acknowledged', () => {
+    const acknowledged = new FlappyRenderSimulation();
+    const pending = new FlappyRenderSimulation();
+    for (const simulation of [acknowledged, pending]) {
+      simulation.reset([bird()], 0);
+      simulation.applyLocalJump(0, 1, -10);
+      simulation.update(1000 / 60, 16.67);
+    }
+
+    acknowledged.applySnapshot(
+      3,
+      [bird({ y: 160, velocityY: -8 })],
+      [1],
+      0,
+      50,
+    );
+    pending.applySnapshot(3, [bird({ y: 160, velocityY: -8 })], [0], 0, 50);
+    const corrected = acknowledged.update(1000 / 60, 66.67)[0];
+    const unacknowledged = pending.update(1000 / 60, 66.67)[0];
+    const authorityYAfterFrame = 160 - 8 + 0.5 * 0.75;
+
+    expect(corrected.y).not.toBe(authorityYAfterFrame);
+    expect(Math.abs(corrected.y - authorityYAfterFrame)).toBeLessThan(
+      Math.abs(unacknowledged.y - authorityYAfterFrame),
+    );
+  });
+});
+
+describe('Flappy server input sequencing', () => {
+  it('ignores duplicate and reversed inputs and keeps player acks isolated', () => {
+    const emitted: Array<{ event: string; data: any }> = [];
+    const socket: GameSocket = {
+      id: 'p0',
+      emit: (event, data) => emitted.push({ event, data }),
+      to: () => ({ emit: () => undefined }),
+      disconnect: () => undefined,
+    };
+    const transport: GameTransport = {
+      sockets: { sockets: new Map([['p0', socket]]) },
+      to: () => ({ emit: () => undefined }),
+      scheduleAlarm: async () => undefined,
+      clearAlarm: async () => undefined,
+    };
+    const session = new GameSession(transport, 'abcdefghij');
+    session.addPlayer('p0', '첫째');
+    session.addPlayer('p1', '둘째');
+    const game = new FlappyBirdInstance(session);
+    game.initialize(getDefaultConfig(GameType.FLAPPY_BIRD) as any);
+
+    game.handlePacket(socket, 0, {
+      type: FlappyBirdPacketType.FLAPPY_JUMP,
+      inputSeq: 2,
+    });
+    game.handlePacket(socket, 0, {
+      type: FlappyBirdPacketType.FLAPPY_REQUEST_SYNC,
+    });
+    const firstSync = emitted.at(-1)!.data;
+
+    game.handlePacket(socket, 0, {
+      type: FlappyBirdPacketType.FLAPPY_JUMP,
+      inputSeq: 2,
+    });
+    game.handlePacket(socket, 0, {
+      type: FlappyBirdPacketType.FLAPPY_JUMP,
+      inputSeq: 1,
+    });
+    game.handlePacket(socket, 0, {
+      type: FlappyBirdPacketType.FLAPPY_REQUEST_SYNC,
+    });
+    const duplicateSync = emitted.at(-1)!.data;
+
+    expect(firstSync.lastProcessedInputSeqs).toEqual([2, 0]);
+    expect(duplicateSync.lastProcessedInputSeqs).toEqual([2, 0]);
+    expect(duplicateSync.birds[0].vy).toBe(firstSync.birds[0].vy);
+    game.destroy();
   });
 });
 

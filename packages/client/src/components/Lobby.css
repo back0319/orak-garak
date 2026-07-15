@@ -4,12 +4,15 @@
 
 .lobby-container {
   width: 100vw;
-  min-height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  padding: 20px;
+  padding: max(20px, env(safe-area-inset-top))
+    max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom))
+    max(20px, env(safe-area-inset-left));
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .lobby-header {
@@ -39,7 +42,7 @@
   display: flex;
   gap: 20px;
   min-height: 0;
-  max-height: calc(100vh - 200px);
+  max-height: calc(100dvh - 200px);
 }
 
 .lobby-left {
@@ -416,6 +419,7 @@
 .lobby-footer button {
   font-size: 18px;
   padding: 12px 24px;
+  min-height: 44px;
 }
 
 .lobby-footer button:disabled {
@@ -617,5 +621,151 @@
   .lobby-footer button {
     font-size: 16px;
     padding: 10px 20px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .lobby-container {
+    padding: max(6px, env(safe-area-inset-top))
+      max(8px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom))
+      max(8px, env(safe-area-inset-left));
+  }
+
+  .lobby-header {
+    min-height: 34px;
+    margin-bottom: 6px;
+    gap: 7px;
+  }
+
+  .lobby-title-icon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .lobby-title {
+    font-size: 22px;
+  }
+
+  .lobby-content {
+    gap: 8px;
+    max-height: none;
+    min-height: 0;
+  }
+
+  .lobby-left {
+    flex: 0 0 clamp(190px, 30vw, 245px);
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .lobby-right {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .player-section,
+  .game-section {
+    padding: 8px !important;
+    padding-bottom: 8px !important;
+    overflow: hidden;
+  }
+
+  .section-header,
+  .section-title {
+    margin-bottom: 6px;
+  }
+
+  .section-title {
+    font-size: 14px;
+  }
+
+  .difficulty-legend {
+    font-size: 9px;
+    gap: 4px;
+  }
+
+  .player-list,
+  .game-list {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .player-list {
+    gap: 6px;
+  }
+
+  .player-item {
+    min-height: 44px;
+    height: 44px;
+    padding: 6px;
+    gap: 7px;
+  }
+
+  .player-name {
+    font-size: 13px;
+  }
+
+  .player-host-badge {
+    padding: 2px 5px;
+    font-size: 10px;
+  }
+
+  .game-list {
+    gap: 8px;
+    padding: 3px 8px 3px 3px;
+  }
+
+  .game-item {
+    min-height: 56px;
+    padding: 7px;
+    gap: 8px;
+  }
+
+  .game-thumbnail {
+    width: 44px;
+    height: 44px;
+    font-size: 26px;
+  }
+
+  .game-name-row {
+    margin-bottom: 5px;
+    gap: 6px;
+  }
+
+  .game-name {
+    font-size: 14px;
+  }
+
+  .game-description {
+    font-size: 10px;
+    line-height: 1.2;
+  }
+
+  .settings-edit {
+    gap: 5px;
+    padding: 5px;
+  }
+
+  .setting-item .nes-select select,
+  .setting-item .nes-input {
+    min-height: 44px;
+  }
+
+  .lobby-footer {
+    min-height: 50px;
+    margin-top: 5px;
+    padding-top: 2px;
+    gap: 8px;
+  }
+
+  .lobby-footer button {
+    min-height: 44px;
+    padding: 7px 13px;
+    font-size: 13px;
+  }
+
+  .lobby-sound-setting {
+    display: none;
   }
 }

@@ -70,103 +70,107 @@ const FlappyBirdResult: React.FC<FlappyBirdResultProps> = ({
       `}
       </style>
       <div
+        className="game-result-overlay"
         style={{
           ...getOverlayStyle(),
           opacity,
           transition: 'opacity 1.5s ease-in',
         }}
       >
-      <div
-        className="nes-container is-rounded"
-        style={{
-          ...getContainerStyle(ratio),
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-        }}
-      >
-        <h1 style={getTitleStyle(ratio)}>GAME OVER</h1>
+        <div
+          className="nes-container is-rounded game-result-dialog flappy-result-dialog"
+          style={{
+            ...getContainerStyle(ratio),
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+          }}
+        >
+          <h1 style={getTitleStyle(ratio)}>GAME OVER</h1>
 
-        <div style={getContentStyle(ratio)}>
-          {collidedPlayerId ? (
-            <div style={getReasonStyle(ratio)}>
-              <span style={{ color: playerColor, fontWeight: 'bold' }}>
-                {playerName}
-              </span>{' '}
-              {collisionType}
-            </div>
-          ) : (
-            <div style={getReasonStyle(ratio)}>{collisionType}</div>
-          )}
-
-          <div style={getScoreLabelStyle(ratio)}>최종 점수</div>
-          <div style={getFinalScoreStyle(ratio)}>{finalScore}</div>
-        </div>
-
-        <div style={getButtonContainerStyle(ratio)}>
-          {/* REPLAY 버튼 */}
-          <div
-            style={{ position: 'relative', display: 'inline-block' }}
-            onMouseEnter={() => !isHost && setShowReplayTooltip(true)}
-            onMouseLeave={() => setShowReplayTooltip(false)}
-          >
-            <button
-              type="button"
-              className="nes-btn is-primary"
-              style={getButtonStyle(ratio)}
-              onClick={() => {
-                if (!isHost) return;
-                playSFX('buttonClick');
-                onReplay();
-              }}
-              onMouseEnter={() => {
-                if (isHost) playSFX('buttonHover');
-              }}
-              disabled={!isHost}
-            >
-              REPLAY
-            </button>
-            {showReplayTooltip && !isHost && (
-              <div style={getTooltipBoxStyle(ratio)}>
-                방장만 해당 작업을 수행할 수 있습니다.
-                <div style={getTooltipArrowStyle(ratio)} />
+          <div className="game-result-scroll" style={getContentStyle(ratio)}>
+            {collidedPlayerId ? (
+              <div style={getReasonStyle(ratio)}>
+                <span style={{ color: playerColor, fontWeight: 'bold' }}>
+                  {playerName}
+                </span>{' '}
+                {collisionType}
               </div>
+            ) : (
+              <div style={getReasonStyle(ratio)}>{collisionType}</div>
             )}
+
+            <div style={getScoreLabelStyle(ratio)}>최종 점수</div>
+            <div style={getFinalScoreStyle(ratio)}>{finalScore}</div>
           </div>
 
-          {/* LOBBY 버튼 */}
           <div
-            style={{ position: 'relative', display: 'inline-block' }}
-            onMouseEnter={() => !isHost && setShowLobbyTooltip(true)}
-            onMouseLeave={() => setShowLobbyTooltip(false)}
+            className="game-result-actions"
+            style={getButtonContainerStyle(ratio)}
           >
-            <button
-              type="button"
-              className="nes-btn"
-              style={getButtonStyle(ratio)}
-              onClick={() => {
-                if (!isHost) return;
-                playSFX('buttonClick');
-                onLobby();
-              }}
-              onMouseEnter={() => {
-                if (isHost) playSFX('buttonHover');
-              }}
-              disabled={!isHost}
+            {/* REPLAY 버튼 */}
+            <div
+              style={{ position: 'relative', display: 'inline-block' }}
+              onMouseEnter={() => !isHost && setShowReplayTooltip(true)}
+              onMouseLeave={() => setShowReplayTooltip(false)}
             >
-              LOBBY
-            </button>
-            {showLobbyTooltip && !isHost && (
-              <div style={getTooltipBoxStyle(ratio)}>
-                방장만 해당 작업을 수행할 수 있습니다.
-                <div style={getTooltipArrowStyle(ratio)} />
-              </div>
-            )}
+              <button
+                type="button"
+                className="nes-btn is-primary"
+                style={getButtonStyle(ratio)}
+                onClick={() => {
+                  if (!isHost) return;
+                  playSFX('buttonClick');
+                  onReplay();
+                }}
+                onMouseEnter={() => {
+                  if (isHost) playSFX('buttonHover');
+                }}
+                disabled={!isHost}
+              >
+                REPLAY
+              </button>
+              {showReplayTooltip && !isHost && (
+                <div style={getTooltipBoxStyle(ratio)}>
+                  방장만 해당 작업을 수행할 수 있습니다.
+                  <div style={getTooltipArrowStyle(ratio)} />
+                </div>
+              )}
+            </div>
+
+            {/* LOBBY 버튼 */}
+            <div
+              style={{ position: 'relative', display: 'inline-block' }}
+              onMouseEnter={() => !isHost && setShowLobbyTooltip(true)}
+              onMouseLeave={() => setShowLobbyTooltip(false)}
+            >
+              <button
+                type="button"
+                className="nes-btn"
+                style={getButtonStyle(ratio)}
+                onClick={() => {
+                  if (!isHost) return;
+                  playSFX('buttonClick');
+                  onLobby();
+                }}
+                onMouseEnter={() => {
+                  if (isHost) playSFX('buttonHover');
+                }}
+                disabled={!isHost}
+              >
+                LOBBY
+              </button>
+              {showLobbyTooltip && !isHost && (
+                <div style={getTooltipBoxStyle(ratio)}>
+                  방장만 해당 작업을 수행할 수 있습니다.
+                  <div style={getTooltipArrowStyle(ratio)} />
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
-    </div>
     </>
   );
 };

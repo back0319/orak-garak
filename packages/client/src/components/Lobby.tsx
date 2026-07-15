@@ -3,7 +3,6 @@ import 'nes.css/css/nes.min.css';
 import '../assets/fonts/Font.css';
 import './Lobby.css';
 // import type { Game, GameSettings } from '../game/types/common';
-import type { AppleGamePreset } from '../game/types/AppleGamePreset';
 import type {
   FlappyBirdGamePreset,
   PipeGapPreset,
@@ -12,7 +11,7 @@ import type {
   PipeSpeedPreset,
   RopeLengthPreset,
 } from '../../../common/src/config';
-import type { LobbyPlayer, Game, GameSettings } from '../game/types/common';
+import type { Game, GameSettings } from '../game/types/common';
 import type {
   MineSweeperGamePreset,
   MapSizePreset,
@@ -41,7 +40,6 @@ import { GAME_DESCRIPTIONS } from '../constants/gameDescriptions';
 import faviconIcon from '../assets/icons/favicon.png';
 
 const {
-  PLAYER_COLORS,
   MAX_PLAYERS,
   TOOLTIP_DURATION,
   MIN_TIME_LIMIT,
@@ -439,7 +437,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
         }));
       });
     }
-  }, [serverSelectedGame, serverGameConfig]);
+  }, [serverSelectedGame, serverGameConfig, localTimeInput]);
 
   // 빈 슬롯 생성
   const emptySlots = Array(MAX_PLAYERS - players.length).fill(null);
@@ -1267,6 +1265,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
 
       {/* 소리 설정 */}
       <div
+        className="lobby-sound-setting"
         style={{
           position: 'fixed',
           bottom: '20px',

@@ -205,6 +205,7 @@ export enum FlappyBirdPacketType {
 export interface FlappyJumpPacket {
   type: FlappyBirdPacketType.FLAPPY_JUMP;
   timestamp: number;
+  inputSeq: number;
 }
 
 export interface FlappyWorldStatePacket {
@@ -213,6 +214,7 @@ export interface FlappyWorldStatePacket {
   birds: FlappyBirdData[];
   pipes: FlappyPipeData[];
   cameraX: number;
+  lastProcessedInputSeqs: number[];
 }
 
 export interface FlappyScoreUpdatePacket {
@@ -243,6 +245,7 @@ export interface FlappySyncStatePacket {
   cameraX: number;
   score: number;
   isGameOver: boolean;
+  lastProcessedInputSeqs: number[];
   gameOverData?: {
     reason: 'pipe_collision' | 'ground_collision';
     collidedPlayerIndex: number;

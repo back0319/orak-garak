@@ -10,8 +10,9 @@ import type { PlayerData } from './types/common';
 import { GAME_WIDTH, GAME_HEIGHT } from './config/gameConfig';
 import { GameType } from '../../../common/src/config.ts';
 import { useGameStore } from '../store/gameStore';
+import { useViewport } from '../hooks/useViewport';
 
-type SceneConstructor = new (...args: any[]) => Phaser.Scene;
+type SceneConstructor = new (...args: never[]) => Phaser.Scene;
 
 interface ConfigDetails {
   sceneName: string;
@@ -88,6 +89,7 @@ export const GameContainer: React.FC<GameContainerProps> = ({
 }) => {
   const gameRef = useRef<Phaser.Game | null>(null);
   const parentRef = useRef<HTMLDivElement>(null);
+  const viewport = useViewport();
 
   const isValidGameType =
     //   gameType === GameType.APPLE_GAME || gameType === GameType.FLAPPY_BIRD;
@@ -113,8 +115,8 @@ export const GameContainer: React.FC<GameContainerProps> = ({
     if (!config) return { width: 800, height: 600, ratio: 1 };
 
     const aspectRatio = config.maxWidth / config.maxHeight;
-    const vw = Math.min(window.innerWidth, config.maxWidth);
-    const vh = Math.min(window.innerHeight * 0.8, config.maxHeight);
+    const vw = Math.min(viewport.width, config.maxWidth);
+    const vh = Math.min(viewport.height, config.maxHeight);
 
     let width = vw;
     let height = vw / aspectRatio;
@@ -127,36 +129,25 @@ export const GameContainer: React.FC<GameContainerProps> = ({
     const ratio = width / config.maxWidth;
 
     return { width, height, ratio };
-  }, [config]);
+  }, [config, viewport.height, viewport.width]);
 
   // 비율 업데이트 (리사이즈 포함)
   useLayoutEffect(() => {
     if (!config) return;
 
-    const updateRatio = () => {
-      const aspectRatio = config.maxWidth / config.maxHeight;
-      const vw = Math.min(window.innerWidth, config.maxWidth);
-      const vh = Math.min(window.innerHeight * 0.8, config.maxHeight);
-
-      let width = vw;
-      const height = vw / aspectRatio;
-
-      if (height > vh) {
-        width = vh * aspectRatio;
-      }
-
-      const ratio = width / config.maxWidth;
-      window.__GAME_RATIO = ratio;
-    };
-
-    updateRatio();
-    window.addEventListener('resize', updateRatio);
-    return () => window.removeEventListener('resize', updateRatio);
-  }, [config]);
+    window.__GAME_RATIO = layout.ratio;
+  }, [config, layout.ratio]);
 
   // 게임 초기화
   useEffect(() => {
-    if (!config || gameRef.current || !parentRef.current) return;
+    if (
+      !config ||
+      viewport.isPortrait ||
+      gameRef.current ||
+      !parentRef.current
+    ) {
+      return;
+    }
 
     window.__GAME_RATIO = layout.ratio;
 
@@ -183,6 +174,14 @@ export const GameContainer: React.FC<GameContainerProps> = ({
         mode: Phaser.Scale.NONE,
         autoCenter: Phaser.Scale.CENTER_BOTH,
       },
+      fps:
+        gameType === GameType.FLAPPY_BIRD
+          ? {
+              target: 60,
+              smoothStep: false,
+              panicMax: 8,
+            }
+          : undefined,
     };
 
     const game = new Phaser.Game(gameConfig);
@@ -371,7 +370,7 @@ export const GameContainer: React.FC<GameContainerProps> = ({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config, layout.ratio, gameType]);
+  }, [config, layout.ratio, gameType, viewport.isPortrait]);
 
   // 플레이어 데이터 업데이트
   useEffect(() => {
@@ -428,23 +427,30 @@ export const GameContainer: React.FC<GameContainerProps> = ({
   }
 
   return (
-    <div
-      ref={parentRef}
-      // todo 이게 무슨 하드코딩임? id가 뭔지 역할을 알 필요가 있음.
-      // id={gameType === GameType.APPLE_GAME ? 'apple-game' : 'flappy-game'}
-      id={`${gameType}-game`}
-      style={{
-        width: `${layout.width}px`,
-        height: `${layout.height}px`,
-        maxWidth: '100%',
-        maxHeight: '100%',
-        minWidth: '320px',
-        minHeight: '200px',
-        margin: '0 auto',
-        display: 'block',
-        background: config.backgroundColor,
-        position: 'relative',
-      }}
-    />
+    <div className="phaser-viewport-shell">
+      <div
+        ref={parentRef}
+        // todo 이게 무슨 하드코딩임? id가 뭔지 역할을 알 필요가 있음.
+        // id={gameType === GameType.APPLE_GAME ? 'apple-game' : 'flappy-game'}
+        id={`${gameType}-game`}
+        style={{
+          width: `${layout.width}px`,
+          height: `${layout.height}px`,
+          maxWidth: '100%',
+          maxHeight: '100%',
+          margin: '0 auto',
+          display: viewport.isPortrait ? 'none' : 'block',
+          background: config.backgroundColor,
+          position: 'relative',
+        }}
+      />
+      {viewport.isPortrait ? (
+        <div className="orientation-lock" role="status" aria-live="polite">
+          <span aria-hidden="true">↻</span>
+          <strong>가로로 돌려주세요</strong>
+          <small>게임은 가로 화면에 최적화되어 있어요.</small>
+        </div>
+      ) : null}
+    </div>
   );
 };
