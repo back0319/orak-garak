@@ -37,11 +37,12 @@ const FlappyBirdResult: React.FC<FlappyBirdResultProps> = ({
   const isHost = isPlayerHost();
 
   useEffect(() => {
-    // 마운트 후 페이드인 시작
-    const timer = setTimeout(() => {
+    // 첫 페인트 직후 짧게 표시해 충돌 화면과 자연스럽게 이어지게 한다.
+    // 긴 1.5초 페이드는 저사양 모바일에서 결과가 늦게 뜨는 것처럼 보였다.
+    const frame = requestAnimationFrame(() => {
       setOpacity(1);
-    }, 50);
-    return () => clearTimeout(timer);
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   // 충돌한 플레이어 정보 가져오기
@@ -74,7 +75,8 @@ const FlappyBirdResult: React.FC<FlappyBirdResultProps> = ({
         style={{
           ...getOverlayStyle(),
           opacity,
-          transition: 'opacity 1.5s ease-in',
+          transition: 'opacity 160ms ease-out',
+          willChange: 'opacity',
         }}
       >
         <div

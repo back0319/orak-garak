@@ -332,6 +332,19 @@ describe('Flappy client render simulation', () => {
     expect(next.velocityY).toBeLessThan(0);
   });
 
+  it('starts a local jump from the currently displayed sub-frame position', () => {
+    const simulation = new FlappyRenderSimulation();
+    simulation.reset([bird({ velocityY: 6 })], 0);
+
+    const displayedBeforeJump = simulation.update(1000 / 120)[0].y;
+    simulation.applyLocalJump(0, 1, -10);
+
+    expect(simulation.getBirds()[0].y).toBeCloseTo(displayedBeforeJump, 6);
+    expect(simulation.update(1000 / 120)[0].y).toBeLessThan(
+      displayedBeforeJump,
+    );
+  });
+
   it('reconciles small server errors and snaps impossible divergence', () => {
     const simulation = new FlappyRenderSimulation();
     simulation.reset([bird()], 0);

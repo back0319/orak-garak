@@ -522,6 +522,11 @@ export default class FlappyBirdsScene extends Phaser.Scene {
           !previous.isGameOver &&
           current.gameOverData
         ) {
+          // 서버의 충돌 판정은 최종 권위 상태로 보관하되, 이미 플레이 중인
+          // 화면은 방금 렌더링한 프레임에서 멈춘다. 서버 20Hz 좌표로 다시
+          // 이동시키면 모달이 뜨기 직전에 새와 카메라가 한 번 튀어 보인다.
+          const preserveDisplayedFrame =
+            this.gameStarted && this.hasDisplayedBirdFrame();
           this.gameStarted = false;
           this.isGameOver = true;
 
@@ -536,8 +541,9 @@ export default class FlappyBirdsScene extends Phaser.Scene {
               angle: bird.angle,
             }));
 
-            // 비활성 탭에서도 즉시 반영되도록 스프라이트 위치 직접 설정
-            this.applyGameOverPositions();
+            // 새로 접속했거나 비활성 탭에서 복원하는 경우에는 서버 최종
+            // 위치를 쓰고, 활성 플레이 중이었다면 현재 화면을 그대로 둔다.
+            this.applyGameOverPositions({ preserveDisplayedFrame });
           }
 
           this.events.emit('flappyStrike');
@@ -1233,17 +1239,30 @@ export default class FlappyBirdsScene extends Phaser.Scene {
    * 게임 오버 시 스프라이트 위치와 밧줄을 즉시 적용 (비활성 탭 대응)
    * update()가 호출되지 않아도 최종 위치가 반영되도록 함
    */
-  private applyGameOverPositions(): void {
+  private hasDisplayedBirdFrame(): boolean {
+    return (
+      this.birdSprites.length > 0 &&
+      this.birdSprites.some(
+        (sprite) =>
+          sprite.active && Number.isFinite(sprite.x) && Number.isFinite(sprite.y),
+      )
+    );
+  }
+
+  private applyGameOverPositions(options?: {
+    preserveDisplayedFrame?: boolean;
+  }): void {
     const camera = this.cameras?.main;
     if (!camera || !this.sys?.game) return;
 
     const ratio = this.getRatio();
     const store = useGameStore.getState();
+    const preserveDisplayedFrame = options?.preserveDisplayedFrame ?? false;
 
     // 0. 카메라 위치 설정 (새들이 화면에 보이도록)
     const cameraX =
       store.flappyCameraX ?? store.flappyGameOverData?.cameraX ?? 0;
-    if (cameraX > 0) {
+    if (!preserveDisplayedFrame && cameraX > 0) {
       camera.scrollX = cameraX * ratio;
       // 지면 스크롤도 동기화
       if (this.groundTile) {
@@ -1253,24 +1272,26 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     }
 
     // 1. 스프라이트 위치 즉시 설정
-    for (let i = 0; i < this.birdSprites.length; i++) {
-      const sprite = this.birdSprites[i];
-      const target = this.targetPositions[i];
+    if (!preserveDisplayedFrame) {
+      for (let i = 0; i < this.birdSprites.length; i++) {
+        const sprite = this.birdSprites[i];
+        const target = this.targetPositions[i];
 
-      if (target && sprite.active) {
-        sprite.x = target.x * ratio;
-        sprite.y = target.y * ratio;
+        if (target && sprite.active) {
+          sprite.x = target.x * ratio;
+          sprite.y = target.y * ratio;
 
-        // 각도 설정
-        let angle = target.angle;
-        if (angle === 0) {
-          angle = Phaser.Math.Clamp(target.velocityY * 10, -30, 90);
+          // 각도 설정
+          let angle = target.angle;
+          if (angle === 0) {
+            angle = Phaser.Math.Clamp(target.velocityY * 10, -30, 90);
+          }
+          // 바닥 부근이면 수직 상태
+          if (sprite.y > (FLAPPY_GROUND_Y - 30) * ratio) {
+            angle = 90;
+          }
+          sprite.rotation = Phaser.Math.DegToRad(angle);
         }
-        // 바닥 부근이면 수직 상태
-        if (sprite.y > (FLAPPY_GROUND_Y - 30) * ratio) {
-          angle = 90;
-        }
-        sprite.rotation = Phaser.Math.DegToRad(angle);
       }
     }
 
@@ -1298,7 +1319,11 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       }
     }
 
-    console.log('[FlappyBirdsScene] 게임 오버 위치 즉시 적용 완료');
+    console.log(
+      preserveDisplayedFrame
+        ? '[FlappyBirdsScene] 게임 오버 화면 프레임 고정 완료'
+        : '[FlappyBirdsScene] 게임 오버 위치 즉시 적용 완료',
+    );
   }
 
   /**

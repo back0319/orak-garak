@@ -131,23 +131,52 @@ function Lobby({ players, onGameStart }: LobbyProps) {
     });
   };
 
+  const clearLocalTimeInput = (gameId: string) => {
+    setLocalTimeInput((prev) => {
+      if (prev[gameId] === undefined) return prev;
+      const next = { ...prev };
+      delete next[gameId];
+      return next;
+    });
+  };
+
+  const handleTimeLimitSelect = (gameId: string, value: number) => {
+    if (value === -1) {
+      // 서버의 직전 설정 echo가 수동 입력 상태를 즉시 덮어쓰지 않도록
+      // 입력 key를 먼저 만든 뒤, 아직 유효한 숫자가 없으므로 전송은 미룬다.
+      setLocalTimeInput((prev) => ({ ...prev, [gameId]: '' }));
+      setGameSettings((prev) => ({
+        ...prev,
+        [gameId]: { ...prev[gameId], timeLimit: -1 },
+      }));
+      return;
+    }
+
+    clearLocalTimeInput(gameId);
+    handleSettingChange(gameId, 'timeLimit', value);
+  };
+
   // 시간 입력 완료 시 호출 (blur/Enter)
   const commitTimeLimit = (gameId: string, defaultValue: number) => {
     const localValue = localTimeInput[gameId];
-    const numValue = localValue ? parseInt(localValue) : -1;
+    const numValue = localValue ? Number(localValue) : -1;
 
     let finalValue: number;
     if (!localValue) {
       finalValue = defaultValue;
-    } else if (numValue < MIN_TIME_LIMIT || numValue > MAX_TIME_LIMIT) {
+    } else if (
+      !Number.isInteger(numValue) ||
+      numValue < MIN_TIME_LIMIT ||
+      numValue > MAX_TIME_LIMIT
+    ) {
       showTimeLimitTooltipForGame(gameId);
       finalValue = defaultValue;
     } else {
       finalValue = numValue;
     }
 
-    // 로컬 상태 초기화
-    setLocalTimeInput((prev) => ({ ...prev, [gameId]: '' }));
+    // 커밋 뒤에는 서버 설정을 다시 동기화할 수 있도록 편집 상태를 제거한다.
+    clearLocalTimeInput(gameId);
 
     // 상태 업데이트 및 패킷 전송
     handleSettingChange(gameId, 'timeLimit', finalValue);
@@ -369,7 +398,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
 
       // 입력 중이면 timeLimit은 덮어쓰지 않음
       const isEditingAppleTime =
-        localTimeInput['apple'] !== undefined && localTimeInput['apple'] !== '';
+        localTimeInput['apple'] !== undefined;
 
       setTimeout(() => {
         setGameSettings((prev) => ({
@@ -411,8 +440,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
 
       // 입력 중이면 timeLimit은 덮어쓰지 않음
       const isEditingMinesweeperTime =
-        localTimeInput['minesweeper'] !== undefined &&
-        localTimeInput['minesweeper'] !== '';
+        localTimeInput['minesweeper'] !== undefined;
 
       // timeLimit 역변환
       const timeLimit =
@@ -615,10 +643,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
                                 onClick={(e) => e.stopPropagation()}
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter') {
-                                    commitTimeLimit(
-                                      game.id,
-                                      DEFAULT_TIME_LIMIT,
-                                    );
+                                    e.preventDefault();
                                     e.currentTarget.blur();
                                   }
                                 }}
@@ -637,11 +662,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
                                   value={settings.timeLimit}
                                   onChange={(e) => {
                                     const val = parseInt(e.target.value);
-                                    handleSettingChange(
-                                      game.id,
-                                      'timeLimit',
-                                      val,
-                                    );
+                                    handleTimeLimitSelect(game.id, val);
                                   }}
                                   onFocus={() => handleSelectGame(game.id)}
                                   style={{
@@ -1127,7 +1148,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
                                 onClick={(e) => e.stopPropagation()}
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter') {
-                                    commitTimeLimit(game.id, 180);
+                                    e.preventDefault();
                                     e.currentTarget.blur();
                                   }
                                 }}
@@ -1146,11 +1167,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
                                   value={settings.timeLimit}
                                   onChange={(e) => {
                                     const val = parseInt(e.target.value);
-                                    handleSettingChange(
-                                      game.id,
-                                      'timeLimit',
-                                      val,
-                                    );
+                                    handleTimeLimitSelect(game.id, val);
                                   }}
                                   onFocus={() => handleSelectGame(game.id)}
                                   style={{

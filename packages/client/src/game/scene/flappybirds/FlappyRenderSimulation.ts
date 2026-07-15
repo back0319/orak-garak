@@ -160,6 +160,7 @@ export class FlappyRenderSimulation {
     inputSeq: number,
     velocityY: number,
   ): void {
+    this.commitDisplayFrame();
     const render = this.renderBirds[playerIndex];
     const display = this.displayBirds[playerIndex];
     const guide = this.guideBirds[playerIndex];
@@ -170,12 +171,29 @@ export class FlappyRenderSimulation {
     this.latestLocalInputSeq = Math.max(this.latestLocalInputSeq, inputSeq);
     render.velocityY = velocityY;
     render.angle = -30;
-    display.y = render.y;
     display.velocityY = velocityY;
     display.angle = -30;
     guide.y = render.y;
     guide.velocityY = velocityY;
     guide.angle = -30;
+  }
+
+  /**
+   * 입력은 두 고정 물리 스텝 사이에도 발생한다. 화면에 이미 표시한 중간
+   * 좌표를 새 기준점으로 삼아 점프가 과거 60Hz 좌표에서 시작하지 않게 한다.
+   */
+  private commitDisplayFrame(): void {
+    if (this.accumulatorMs <= 0) return;
+
+    const frameFraction = Math.min(
+      1,
+      Math.max(0, this.accumulatorMs / PHYSICS_FRAME_MS),
+    );
+    for (let index = 0; index < this.renderBirds.length; index++) {
+      Object.assign(this.renderBirds[index], this.displayBirds[index]);
+      integrate(this.guideBirds[index], frameFraction);
+    }
+    this.accumulatorMs = 0;
   }
 
   update(deltaMs: number, currentTime = nowMs()): readonly BirdPosition[] {
