@@ -16,6 +16,8 @@ import {
   getPredictionFrames,
   getSmoothingAlpha,
 } from '../../client/src/game/scene/flappybirds/interpolation';
+import { FlappyRenderSimulation } from '../../client/src/game/scene/flappybirds/FlappyRenderSimulation';
+import type { BirdPosition } from '../../client/src/game/types/flappybird.types';
 import { FixedStepClock } from '../src/games/instances/fixedStepClock';
 
 interface Packet {
@@ -263,6 +265,55 @@ describe('Flappy rendering interpolation', () => {
     const oneFrame = getSmoothingAlpha(1000 / 60);
     const twoFrames = 1 - (1 - oneFrame) ** 2;
     expect(getSmoothingAlpha(1000 / 30)).toBeCloseTo(twoFrames, 5);
+  });
+});
+
+describe('Flappy client render simulation', () => {
+  const bird = (overrides: Partial<BirdPosition> = {}): BirdPosition => ({
+    playerId: '0',
+    x: 100,
+    y: 200,
+    velocityX: 4,
+    velocityY: 0,
+    angle: 0,
+    ...overrides,
+  });
+
+  it('advances at render frequency between server snapshots', () => {
+    const simulation = new FlappyRenderSimulation();
+    simulation.reset([bird()], 0);
+
+    const first = simulation.update(1000 / 60)[0];
+    expect(first.x).toBeCloseTo(104, 4);
+    expect(first.y).toBeGreaterThan(200);
+    const firstY = first.y;
+
+    const second = simulation.update(1000 / 60)[0];
+    expect(second.x).toBeCloseTo(108, 4);
+    expect(second.y).toBeGreaterThan(firstY);
+  });
+
+  it('applies the local jump before the next server packet arrives', () => {
+    const simulation = new FlappyRenderSimulation();
+    simulation.reset([bird()], 0);
+    simulation.applyLocalJump(0, -10);
+
+    const next = simulation.update(1000 / 60)[0];
+    expect(next.y).toBeLessThan(200);
+    expect(next.velocityY).toBeLessThan(0);
+  });
+
+  it('reconciles small server errors and snaps impossible divergence', () => {
+    const simulation = new FlappyRenderSimulation();
+    simulation.reset([bird()], 0);
+    simulation.update(1000 / 60);
+
+    simulation.applySnapshot(3, [bird({ x: 110, y: 205 })]);
+    expect(simulation.getBirds()[0].x).not.toBe(110);
+
+    simulation.applySnapshot(6, [bird({ x: 500, y: 500 })]);
+    expect(simulation.getBirds()[0].x).toBe(500);
+    expect(simulation.getBirds()[0].y).toBe(500);
   });
 });
 

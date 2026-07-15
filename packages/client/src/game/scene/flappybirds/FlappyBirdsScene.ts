@@ -37,7 +37,8 @@ import {
   type FlappyRequestSyncPacket,
 } from '../../../../../common/src/packets';
 import PipeManager from './PipeManager';
-import { getPredictionFrames, getSmoothingAlpha } from './interpolation';
+import { getSmoothingAlpha } from './interpolation';
+import { FlappyRenderSimulation } from './FlappyRenderSimulation';
 import { useGameStore } from '../../../store/gameStore';
 import { socketManager } from '../../../network/socket';
 
@@ -75,7 +76,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
   // 새 스프라이트
   private birdSprites: Phaser.GameObjects.Sprite[] = [];
   private targetPositions: BirdPosition[] = [];
-  private lastSnapshotReceivedAt: number = 0;
+  private renderSimulation = new FlappyRenderSimulation();
 
   // 바닥 (무한 스크롤용)
   private groundTile!: Phaser.GameObjects.TileSprite;
@@ -151,7 +152,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     // 기존 상태 초기화 (중복 생성 방지)
     this.birdSprites = [];
     this.targetPositions = [];
-    this.lastSnapshotReceivedAt = 0;
+    this.renderSimulation.reset();
     this.ropes = [];
     this.ropeMidPoints = [];
     this.ropePoints = [];
@@ -253,7 +254,6 @@ export default class FlappyBirdsScene extends Phaser.Scene {
 
       // 새 위치 적용
       if (packet.birds && packet.birds.length > 0) {
-        this.lastSnapshotReceivedAt = performance.now();
         this.targetPositions = packet.birds.map(
           (
             bird: {
@@ -272,6 +272,10 @@ export default class FlappyBirdsScene extends Phaser.Scene {
             velocityY: bird.vy,
             angle: bird.angle,
           }),
+        );
+        this.renderSimulation.applySnapshot(
+          packet.tick ?? 0,
+          this.targetPositions,
         );
       }
 
@@ -409,6 +413,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
         cameraX: state.flappyCameraX,
         isGameOver: state.isFlappyGameOver,
         gameOverData: state.flappyGameOverData,
+        tick: state.flappyServerTick,
       }),
       (current, previous) => {
         // pendingGameOverFromSync 상태에서 birds 데이터가 도착하면 게임 오버 처리
@@ -455,7 +460,6 @@ export default class FlappyBirdsScene extends Phaser.Scene {
           current.birds.length > 0 &&
           !this.isGameOver
         ) {
-          this.lastSnapshotReceivedAt = performance.now();
           this.targetPositions = current.birds.map((bird, index) => ({
             playerId: String(index) as PlayerId,
             x: bird.x,
@@ -464,6 +468,10 @@ export default class FlappyBirdsScene extends Phaser.Scene {
             velocityY: bird.vy,
             angle: bird.angle,
           }));
+          this.renderSimulation.applySnapshot(
+            current.tick,
+            this.targetPositions,
+          );
         }
 
         // 파이프 데이터 업데이트
@@ -551,7 +559,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     this.groundTile?.destroy();
     this.ropes = [];
     this.targetPositions = [];
-    this.lastSnapshotReceivedAt = 0;
+    this.renderSimulation.reset();
     this.ropeMidPoints = []; // 밧줄 관성 데이터 초기화 (누행 방지)
     this.ropePoints = [];
     this.isGameOver = false; // 상태 초기화
@@ -608,6 +616,8 @@ export default class FlappyBirdsScene extends Phaser.Scene {
         angle: 0,
       });
     }
+
+    this.renderSimulation.reset(this.targetPositions);
 
     console.log(
       `[FlappyBirdsScene] ${count}개의 새(스프라이트) 생성 완료 (connectAll=${this.gameConfig.connectAll})`,
@@ -980,7 +990,10 @@ export default class FlappyBirdsScene extends Phaser.Scene {
         target.y = sprite.y / this.getRatio();
         target.velocityY = FLAPPY_PHYSICS.FLAP_VELOCITY;
         target.angle = -30;
-        this.lastSnapshotReceivedAt = performance.now();
+        this.renderSimulation.applyLocalJump(
+          playerIndex,
+          FLAPPY_PHYSICS.FLAP_VELOCITY,
+        );
       }
     }
 
@@ -1027,34 +1040,32 @@ export default class FlappyBirdsScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number) {
-    // 20Hz 권위 스냅샷 사이를 속도로 짧게 외삽하고, 실제 렌더 FPS와
-    // 무관한 시간 기반 보간을 적용한다.
+    // 서버는 판정을 담당하고, 클라이언트는 스냅샷 사이를 60Hz로 시뮬레이션한다.
     const ratio = this.getRatio();
-    const snapshotAge =
-      this.lastSnapshotReceivedAt > 0
-        ? performance.now() - this.lastSnapshotReceivedAt
-        : 0;
-    const predictionFrames = isMockMode()
-      ? 0
-      : getPredictionFrames(snapshotAge);
+    const renderPositions = isMockMode() || this.isGameOver
+      ? this.targetPositions
+      : this.renderSimulation.update(delta);
     const smoothingAlpha = getSmoothingAlpha(delta);
     for (let i = 0; i < this.birdSprites.length; i++) {
       const sprite = this.birdSprites[i];
-      const target = this.targetPositions[i];
+      const target = renderPositions[i];
 
       if (target) {
-        const predictedX = target.x + target.velocityX * predictionFrames;
-        const predictedY = target.y + target.velocityY * predictionFrames;
-        sprite.x = Phaser.Math.Linear(
-          sprite.x,
-          predictedX * ratio,
-          smoothingAlpha,
-        );
-        sprite.y = Phaser.Math.Linear(
-          sprite.y,
-          predictedY * ratio,
-          smoothingAlpha,
-        );
+        if (isMockMode()) {
+          sprite.x = Phaser.Math.Linear(
+            sprite.x,
+            target.x * ratio,
+            smoothingAlpha,
+          );
+          sprite.y = Phaser.Math.Linear(
+            sprite.y,
+            target.y * ratio,
+            smoothingAlpha,
+          );
+        } else {
+          sprite.x = target.x * ratio;
+          sprite.y = target.y * ratio;
+        }
 
         // 회전 애니메이션: 기본적으로 서버에서 보낸 각도를 우선 사용하고,
         // 서버 각도가 0이면 velocityY를 기반으로 부드럽게 계산
