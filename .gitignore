@@ -16,6 +16,10 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.*
+!.env.example
+!**/.env.example
 
 # Editor directories and files
 .vscode/*
@@ -30,3 +34,4 @@ dist-ssr
 *.sw?
 *.antigravityrules
 .claude/settings.local.json
+.vercel

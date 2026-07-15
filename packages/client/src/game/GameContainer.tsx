@@ -174,16 +174,6 @@ export const GameContainer: React.FC<GameContainerProps> = ({
         mode: Phaser.Scale.NONE,
         autoCenter: Phaser.Scale.CENTER_BOTH,
       },
-      fps:
-        gameType === GameType.FLAPPY_BIRD
-          ? {
-              // 고주사율 화면에서는 RAF마다 화면 전용 보간값을 그린다.
-              // 물리 판정은 서버만 담당하고 클라이언트는 서버 좌표만 보간한다.
-              target: 120,
-              smoothStep: false,
-              panicMax: 8,
-            }
-          : undefined,
     };
 
     const game = new Phaser.Game(gameConfig);

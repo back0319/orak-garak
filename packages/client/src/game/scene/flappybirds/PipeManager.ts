@@ -38,8 +38,7 @@ export default class PipeManager {
         pipeObj = this.createPipeFromData(pipeData);
         this.pipeObjects.set(pipeData.id, pipeObj);
       } else {
-        pipeObj.x = pipeData.x;
-        this.setPipeGap(pipeObj, pipeData);
+        this.updatePipeFromData(pipeObj, pipeData);
       }
     }
   }
@@ -49,6 +48,10 @@ export default class PipeManager {
     this.scene.add.existing(pipe);
     this.setPipeGap(pipe, pipeData);
     return pipe;
+  }
+
+  private updatePipeFromData(pipe: PipePrefab, pipeData: PipeData): void {
+    pipe.x = pipeData.x;
   }
 
   private setPipeGap(pipe: PipePrefab, pipeData: PipeData): void {

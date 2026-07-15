@@ -12,7 +12,6 @@ export type { PlayerData } from './common-type';
 export enum SystemPacketType {
   UPDATE_NUMBER = 'UPDATE_NUMBER',
   JOIN_ROOM = 'JOIN_ROOM',
-  JOIN_ACCEPTED = 'JOIN_ACCEPTED',
   ROOM_UPDATE = 'ROOM_UPDATE',
   SYSTEM_MESSAGE = 'SYSTEM_MESSAGE',
   GAME_CONFIG_UPDATE_REQ = 'GAME_CONFIG_UPDATE_REQ',
@@ -25,7 +24,6 @@ export enum SystemPacketType {
   REPLAY_REQ = 'REPLAY_REQ',
   SET_TIME = 'SET_TIME',
   TIME_END = 'TIME_END',
-  GAME_INTERRUPTED = 'GAME_INTERRUPTED',
 }
 
 export interface UpdateNumberPacket {
@@ -36,22 +34,6 @@ export interface JoinRoomPacket {
   type: SystemPacketType.JOIN_ROOM;
   roomId: string;
   playerName: string;
-  playerId?: string;
-  resumeToken?: string;
-}
-
-export interface JoinAcceptedPacket {
-  type: SystemPacketType.JOIN_ACCEPTED;
-  roomId: string;
-  playerId: string;
-  resumeToken: string;
-  resumed: boolean;
-}
-
-export interface GameInterruptedPacket {
-  type: SystemPacketType.GAME_INTERRUPTED;
-  reason: 'server_restart' | 'deployment' | 'player_left';
-  message: string;
 }
 
 export enum RoomUpdateType {
@@ -116,8 +98,8 @@ export interface SetTimePacket {
   type: SystemPacketType.SET_TIME;
   limitTime: number;
   serverStartTime: number; // 서버에서 게임이 시작된 시간 (timestamp)
-  endsAt?: number;
-  remainingMs?: number;
+  endsAt: number;
+  remainingMs: number;
 }
 export interface TimeEndPacket {
   type: SystemPacketType.TIME_END;
@@ -127,8 +109,6 @@ export interface TimeEndPacket {
 export type SystemPacket =
   | UpdateNumberPacket
   | JoinRoomPacket
-  | JoinAcceptedPacket
-  | GameInterruptedPacket
   | RoomUpdatePacket
   | SystemMessagePacket
   | GameConfigUpdateReqPacket
@@ -193,16 +173,14 @@ export type AppleGamePacket =
 export enum FlappyBirdPacketType {
   // 클라이언트 → 서버
   FLAPPY_JUMP = 'FLAPPY_JUMP',
-  FLAPPY_CLOCK_PING = 'FLAPPY_CLOCK_PING',
   /** 게임 상태 동기화 요청 (씬 로딩 완료 후) */
   FLAPPY_REQUEST_SYNC = 'FLAPPY_REQUEST_SYNC',
 
   // 서버 → 클라이언트
-  FLAPPY_INPUT_APPLIED = 'FLAPPY_INPUT_APPLIED',
-  FLAPPY_CLOCK_PONG = 'FLAPPY_CLOCK_PONG',
   FLAPPY_WORLD_STATE = 'FLAPPY_WORLD_STATE',
   FLAPPY_SCORE_UPDATE = 'FLAPPY_SCORE_UPDATE',
   FLAPPY_GAME_OVER = 'FLAPPY_GAME_OVER',
+  FLAPPY_START_COUNTDOWN = 'FLAPPY_START_COUNTDOWN',
   /** 게임 상태 동기화 응답 (씬 로딩 완료 후 현재 상태 전송) */
   FLAPPY_SYNC_STATE = 'FLAPPY_SYNC_STATE',
 }
@@ -210,29 +188,6 @@ export enum FlappyBirdPacketType {
 export interface FlappyJumpPacket {
   type: FlappyBirdPacketType.FLAPPY_JUMP;
   timestamp: number;
-  inputSeq: number;
-  roundId?: string;
-}
-
-export interface FlappyClockPingPacket {
-  type: FlappyBirdPacketType.FLAPPY_CLOCK_PING;
-  clientSentAt: number;
-  roundId?: string;
-}
-
-export interface FlappyInputAppliedPacket {
-  type: FlappyBirdPacketType.FLAPPY_INPUT_APPLIED;
-  roundId: string;
-  playerIndex: number;
-  inputSeq: number;
-  applyTick: number;
-}
-
-export interface FlappyClockPongPacket {
-  type: FlappyBirdPacketType.FLAPPY_CLOCK_PONG;
-  roundId: string;
-  clientSentAt: number;
-  serverTick: number;
 }
 
 export interface FlappyWorldStatePacket {
@@ -241,10 +196,6 @@ export interface FlappyWorldStatePacket {
   birds: FlappyBirdData[];
   pipes: FlappyPipeData[];
   cameraX: number;
-  lastProcessedInputSeqs: number[];
-  roundId?: string;
-  physicsSeed?: number;
-  lastFlapTicks?: number[];
 }
 
 export interface FlappyScoreUpdatePacket {
@@ -259,7 +210,11 @@ export interface FlappyGameOverPacket {
   finalScore: number;
   birds: FlappyBirdData[]; // 게임 오버 시점의 새 위치 (로딩 중인 플레이어용)
   cameraX: number; // 게임 오버 시점의 카메라 위치
-  roundId?: string;
+}
+
+export interface FlappyStartCountdownPacket {
+  type: FlappyBirdPacketType.FLAPPY_START_COUNTDOWN;
+  startsAt: number;
 }
 
 /** 클라이언트 → 서버: 씬 로딩 완료 후 동기화 요청 */
@@ -276,10 +231,6 @@ export interface FlappySyncStatePacket {
   cameraX: number;
   score: number;
   isGameOver: boolean;
-  lastProcessedInputSeqs: number[];
-  roundId?: string;
-  physicsSeed?: number;
-  lastFlapTicks?: number[];
   gameOverData?: {
     reason: 'pipe_collision' | 'ground_collision';
     collidedPlayerIndex: number;
@@ -288,13 +239,11 @@ export interface FlappySyncStatePacket {
 
 export type FlappyBirdPacket =
   | FlappyJumpPacket
-  | FlappyClockPingPacket
   | FlappyRequestSyncPacket
-  | FlappyInputAppliedPacket
-  | FlappyClockPongPacket
   | FlappyWorldStatePacket
   | FlappyScoreUpdatePacket
   | FlappyGameOverPacket
+  | FlappyStartCountdownPacket
   | FlappySyncStatePacket;
 
 // ========== MINESWEEPER PACKETS ==========

@@ -13,22 +13,13 @@ import {
   type GameConfig,
   type AppleGameRenderConfig,
   sanitizeForApple,
-  getDefaultConfig,
+  FlappyBirdPacketType,
 } from '@main-game/common';
-import type { GameSocket, GameTransport } from '../network/transport';
+import { Server, Socket } from 'socket.io';
 import { GameInstance } from './instances/GameInstance';
 import { AppleGameInstance } from './instances/AppleGameInstance';
 import { FlappyBirdInstance } from './instances/FlappyBirdInstance';
 import { MineSweeperInstance } from './instances/MineSweeperInstance';
-
-export interface PersistedGameSession {
-  version: 1;
-  selectedGameType: GameType;
-  gameConfigs: Array<[GameType, GameConfig]>;
-  status: GameStatus;
-  players: PlayerState[];
-  activeGame: unknown | null;
-}
 
 export class GameSession {
   // selected game in this session (lobby choice)
@@ -45,9 +36,13 @@ export class GameSession {
   // 플레이어 공통 상태 관리
   public players: Map<string, PlayerState> = new Map();
   private availableColors: Set<string> = new Set(PLAYER_COLORS);
+  private flappyReadyPlayers = new Set<string>();
+  private flappyReadyTimeout: NodeJS.Timeout | null = null;
+  private flappyCountdownTimeout: NodeJS.Timeout | null = null;
+  private waitingForFlappyReady = false;
 
   constructor(
-    public io: GameTransport,
+    public io: Server,
     public roomId: string,
   ) {}
 
@@ -82,6 +77,7 @@ export class GameSession {
       this.availableColors.add(player.color);
     }
     this.players.delete(id);
+    this.flappyReadyPlayers.delete(id);
 
     // 게임 중에 플레이어가 나갔을 경우 게임을 정리하고 상태를 리셋
     if (this.status === 'playing' || this.status === 'ended') {
@@ -96,6 +92,7 @@ export class GameSession {
       }
       // 상태를 waiting으로 리셋
       this.status = 'waiting';
+      this.clearFlappyStartTimers();
     }
 
     // Notify remaining clients about updated room player list
@@ -118,10 +115,8 @@ export class GameSession {
     return -1;
   }
 
-  public updateRemainingPlayers(
-    id: string,
-    updateType: RoomUpdateType = RoomUpdateType.PLAYER_QUIT,
-  ) {
+  public updateRemainingPlayers(id: string) {
+    // Send JOIN to existing players (excluding the new player)
     for (const [playerId] of this.players) {
       if (playerId === id) continue; // 새로 접속한 플레이어 제외
 
@@ -131,7 +126,7 @@ export class GameSession {
       const roomUpdatePacket2Other: RoomUpdatePacket = {
         type: SystemPacketType.ROOM_UPDATE,
         players: this.getPlayers(),
-        updateType,
+        updateType: RoomUpdateType.PLAYER_QUIT,
         yourIndex: this.getIndex(playerId),
         roomId: this.roomId,
       };
@@ -224,6 +219,7 @@ export class GameSession {
       return;
     }
     this.status = 'playing';
+    this.clearFlappyStartTimers();
 
     // 이전 게임 인스턴스 정리 (혹시 남아있을 경우 대비)
     if (this.games) {
@@ -236,11 +232,8 @@ export class GameSession {
     // todo 이거 config 값을 생성할 때부터
     this.games = this.createGameInstance(this.selectedGameType);
 
-    const config =
-      this.gameConfigs.get(this.selectedGameType) ??
-      getDefaultConfig(this.selectedGameType);
-    this.gameConfigs.set(this.selectedGameType, config);
-    this.games.initialize(config);
+    const config = this.gameConfigs.get(this.selectedGameType);
+    this.games.initialize(config as GameConfig);
 
     // READY_SCENE 브로드캐스트
     this.broadcastPacket({
@@ -248,10 +241,28 @@ export class GameSession {
       selectedGameType: this.selectedGameType,
     });
 
+    if (this.selectedGameType === GameType.FLAPPY_BIRD) {
+      this.waitingForFlappyReady = true;
+      this.flappyReadyTimeout = setTimeout(() => {
+        if (!this.waitingForFlappyReady || this.status !== 'playing') return;
+        this.clearFlappyStartTimers();
+        this.games?.destroy();
+        this.games = null;
+        this.status = 'waiting';
+        this.broadcastPacket({
+          type: SystemPacketType.SYSTEM_MESSAGE,
+          message: '게임 화면 준비 시간이 초과되어 로비로 돌아갑니다.',
+        });
+        this.broadcastPacket({ type: SystemPacketType.RETURN_TO_THE_LOBBY });
+      }, 10_000);
+      return;
+    }
+
     this.games.start();
   }
 
   public stopGame(): void {
+    this.clearFlappyStartTimers();
     this.status = 'ended';
     if (this.games) {
       this.games.stop();
@@ -328,7 +339,7 @@ export class GameSession {
   }
 
   // ========== PACKET ROUTING ==========
-  public handleGamePacket(socket: GameSocket, packet: any): void {
+  public handleGamePacket(socket: Socket, packet: any): void {
     if (!this.games || this.status !== 'playing') {
       console.log(
         `[GameSession] handleGamePacket 무시됨 - games: ${!!this.games}, status: ${this.status}`,
@@ -337,7 +348,50 @@ export class GameSession {
     }
 
     const playerIndex = this.getIndex(socket.id);
+
+    if (
+      this.selectedGameType === GameType.FLAPPY_BIRD &&
+      packet.type === FlappyBirdPacketType.FLAPPY_REQUEST_SYNC
+    ) {
+      this.games.handlePacket(socket, playerIndex, packet);
+
+      if (this.waitingForFlappyReady) {
+        this.flappyReadyPlayers.add(socket.id);
+        const everyoneReady = Array.from(this.players.keys()).every((id) =>
+          this.flappyReadyPlayers.has(id),
+        );
+
+        if (everyoneReady) {
+          this.waitingForFlappyReady = false;
+          if (this.flappyReadyTimeout) clearTimeout(this.flappyReadyTimeout);
+          this.flappyReadyTimeout = null;
+          const startsAt = Date.now() + 1000;
+          this.broadcastPacket({
+            type: FlappyBirdPacketType.FLAPPY_START_COUNTDOWN,
+            startsAt,
+          });
+          this.flappyCountdownTimeout = setTimeout(() => {
+            this.flappyCountdownTimeout = null;
+            if (this.status === 'playing') this.games?.start();
+          }, Math.max(0, startsAt - Date.now()));
+        }
+      }
+      return;
+    }
+
+    console.log(
+      `[GameSession] handleGamePacket 전달 - type: ${packet.type}, playerIndex: ${playerIndex}`,
+    );
     this.games.handlePacket(socket, playerIndex, packet);
+  }
+
+  private clearFlappyStartTimers(): void {
+    if (this.flappyReadyTimeout) clearTimeout(this.flappyReadyTimeout);
+    if (this.flappyCountdownTimeout) clearTimeout(this.flappyCountdownTimeout);
+    this.flappyReadyTimeout = null;
+    this.flappyCountdownTimeout = null;
+    this.waitingForFlappyReady = false;
+    this.flappyReadyPlayers.clear();
   }
 
   public broadcastPacket(packet: ServerPacket) {
@@ -346,52 +400,5 @@ export class GameSession {
 
     // Broadcast callback
     this.io.to(this.roomId).emit(packet.type, payload);
-  }
-
-  public handleAlarm(): void {
-    this.games?.handleAlarm?.();
-  }
-
-  public serialize(): PersistedGameSession {
-    return {
-      version: 1,
-      selectedGameType: this.selectedGameType,
-      gameConfigs: Array.from(this.gameConfigs.entries()),
-      status: this.status,
-      players: Array.from(this.players.values()),
-      activeGame: this.games?.serialize() ?? null,
-    };
-  }
-
-  public restore(snapshot: PersistedGameSession): { interrupted: boolean } {
-    this.selectedGameType = snapshot.selectedGameType;
-    this.gameConfigs = new Map(snapshot.gameConfigs);
-    this.players = new Map(
-      snapshot.players.map((player) => [player.id, player]),
-    );
-    this.availableColors = new Set(
-      PLAYER_COLORS.filter(
-        (color) => !snapshot.players.some((player) => player.color === color),
-      ),
-    );
-    this.status = snapshot.status;
-
-    if (snapshot.status !== 'playing') {
-      return { interrupted: false };
-    }
-
-    if (snapshot.selectedGameType === GameType.FLAPPY_BIRD) {
-      this.status = 'waiting';
-      return { interrupted: true };
-    }
-
-    if (!snapshot.activeGame) {
-      this.status = 'waiting';
-      return { interrupted: true };
-    }
-
-    this.games = this.createGameInstance(snapshot.selectedGameType);
-    this.games.restore(snapshot.activeGame);
-    return { interrupted: false };
   }
 }

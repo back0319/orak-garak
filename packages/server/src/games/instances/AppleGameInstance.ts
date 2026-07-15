@@ -1,28 +1,29 @@
 import { GameInstance } from './GameInstance';
 import {
-  AppleGameRenderConfig,
+  type AppleGameRenderConfig,
   DEFAULT_APPLE_GAME_RENDER_CONFIG,
   GameType,
-} from '@main-game/common';
-import {
-  AppleGamePacket,
+  type AppleGamePacket,
   AppleGamePacketType,
-  DropCellIndexPacket,
-  SetFieldPacket,
-  SetTimePacket,
+  type DropCellIndexPacket,
+  type SetFieldPacket,
+  type SetTimePacket,
   SystemPacketType,
-  TimeEndPacket,
-  UpdateScorePacket,
+  type TimeEndPacket,
+  type UpdateScorePacket,
+  type PlayerData,
+  type ReportCard,
 } from '@main-game/common';
-import type { PlayerData, ReportCard } from '@main-game/common';
 import { GameSession } from '../gameSession';
-import type { GameSocket } from '../../network/transport';
+import { Socket } from 'socket.io';
 
 export class AppleGameInstance implements GameInstance {
   private apples: number[] = [];
   private removedIndices: Set<number> = new Set();
+  private timerTimeout: NodeJS.Timeout | null = null;
   private timeLeft: number = 0;
-  private endsAt: number = 0;
+  private endsAt = 0;
+  private finished = false;
 
   // Player ID -> last drag area & repeat count
   private playerDragState = new Map<
@@ -45,6 +46,7 @@ export class AppleGameInstance implements GameInstance {
   // 기존 gameSession.ts에서 Apple 전용 로직 이동
   initialize(config: AppleGameRenderConfig): void {
     this.timeLeft = config.totalTime;
+    this.finished = false;
     this.removedIndices.clear();
     this.generateField(config);
   }
@@ -71,14 +73,13 @@ export class AppleGameInstance implements GameInstance {
     this.session.broadcastPacket(setFieldPacket);
 
     // Broadcast Time
-    const serverStartTime = Date.now();
-    this.endsAt = serverStartTime + this.timeLeft * 1000;
+    this.endsAt = Date.now() + this.timeLeft * 1000;
     const setTimePacket: SetTimePacket = {
       type: SystemPacketType.SET_TIME,
       limitTime: this.timeLeft,
-      serverStartTime,
+      serverStartTime: this.endsAt - this.timeLeft * 1000,
       endsAt: this.endsAt,
-      remainingMs: this.endsAt - serverStartTime,
+      remainingMs: this.timeLeft * 1000,
     };
     this.session.broadcastPacket(setTimePacket);
 
@@ -92,66 +93,19 @@ export class AppleGameInstance implements GameInstance {
   }
 
   stop(): void {
-    void this.session.io.clearAlarm();
-  }
-
-  destroy(): void {}
-
-  serialize(): unknown {
-    return {
-      apples: this.apples,
-      removedIndices: Array.from(this.removedIndices),
-      timeLeft: Math.max(0, Math.ceil((this.endsAt - Date.now()) / 1000)),
-      endsAt: this.endsAt,
-      playerDragState: Array.from(this.playerDragState.entries()),
-    };
-  }
-
-  restore(snapshot: unknown): void {
-    const data = snapshot as {
-      apples: number[];
-      removedIndices: number[];
-      timeLeft: number;
-      endsAt: number;
-      playerDragState: Array<
-        [
-          number,
-          {
-            startX: number;
-            startY: number;
-            endX: number;
-            endY: number;
-            repeatCount: number;
-          },
-        ]
-      >;
-    };
-    this.apples = data.apples;
-    this.removedIndices = new Set(data.removedIndices);
-    this.timeLeft = data.timeLeft;
-    this.endsAt = data.endsAt;
-    this.playerDragState = new Map(data.playerDragState);
-    if (this.endsAt <= Date.now()) {
-      this.finishGame();
-    } else {
-      void this.session.io.scheduleAlarm(this.endsAt);
+    if (this.timerTimeout) {
+      clearTimeout(this.timerTimeout);
+      this.timerTimeout = null;
     }
   }
 
-  handleAlarm(): void {
-    if (this.session.status !== 'playing') return;
-
-    const now = Date.now();
-    if (now < this.endsAt) {
-      void this.session.io.scheduleAlarm(this.endsAt);
-      return;
-    }
-    this.finishGame();
+  destroy(): void {
+    this.stop();
   }
 
   // todo 얘내 gameSession으로 빼내야 함
   handlePacket(
-    socket: GameSocket,
+    socket: Socket,
     _playerIndex: number,
     packet: AppleGamePacket,
   ): void {
@@ -254,16 +208,28 @@ export class AppleGameInstance implements GameInstance {
   }
 
   private startTimer() {
+    if (this.timerTimeout) clearTimeout(this.timerTimeout);
     console.log('[GameSession] Timer started with', this.timeLeft, 'seconds');
-    void this.session.io.scheduleAlarm(this.endsAt);
+    const schedule = () => {
+      const remaining = this.endsAt - Date.now();
+      if (remaining <= 0) {
+        this.finishGame();
+        return;
+      }
+      this.timerTimeout = setTimeout(schedule, remaining);
+    };
+    schedule();
   }
 
   private finishGame() {
     // 이미 게임이 종료된 상태면 중복 처리 방지
-    if (this.session.status === 'ended') {
+    if (this.finished || this.session.status === 'ended') {
       console.log('[AppleGameInstance] 게임이 이미 종료됨 - finishGame 무시');
       return;
     }
+
+    this.finished = true;
+    this.stop();
 
     this.session.stopGame();
 

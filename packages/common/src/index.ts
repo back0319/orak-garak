@@ -48,24 +48,6 @@ export {
   getDefaultConfig,
 } from './config';
 
-// ========== Shared Flappy Physics ==========
-export {
-  FLAPPY_PHYSICS_FPS,
-  FLAPPY_NETWORK_FPS,
-  FLAPPY_PHYSICS_SUBSTEPS,
-  FLAPPY_PHYSICS_FRAME_MS,
-  type FlappyPhysicsRuntime,
-  type FlappyPhysicsSnapshot,
-  calculateFlappyBirdPositions,
-  calculateFlappyRopeConnections,
-  createFlappyPhysicsRuntime,
-  destroyFlappyPhysicsRuntime,
-  snapshotFlappyBirds,
-  restoreFlappyBirds,
-  applyDeterministicFlappyJump,
-  stepFlappyBirdPhysics,
-} from './flappyPhysics';
-
 // ========== Packets ==========
 export {
   // System Packets
@@ -73,8 +55,6 @@ export {
   RoomUpdateType,
   type UpdateNumberPacket,
   type JoinRoomPacket,
-  type JoinAcceptedPacket,
-  type GameInterruptedPacket,
   type RoomUpdatePacket,
   type SystemMessagePacket,
   type GameConfigUpdateReqPacket,
@@ -101,13 +81,11 @@ export {
   // Flappy Bird Packets
   FlappyBirdPacketType,
   type FlappyJumpPacket,
-  type FlappyClockPingPacket,
-  type FlappyInputAppliedPacket,
-  type FlappyClockPongPacket,
-  type FlappyRequestSyncPacket,
   type FlappyWorldStatePacket,
   type FlappyScoreUpdatePacket,
   type FlappyGameOverPacket,
+  type FlappyStartCountdownPacket,
+  type FlappyRequestSyncPacket,
   type FlappySyncStatePacket,
   type FlappyBirdPacket,
 
@@ -131,7 +109,6 @@ export {
   // Client -> Server Packets
   type MSRevealTilePacket,
   type MSToggleFlagPacket,
-  type MSRequestSyncPacket,
   type MineSweeperClientPacket,
 
   // Server -> Client Packets

@@ -37,20 +37,6 @@ export const handleServerPacket = (packet: ServerPacket) => {
       console.log(`Player ${packet.playerName} joined ${packet.roomId}`);
       break;
 
-    case SystemPacketType.JOIN_ACCEPTED:
-      break;
-
-    case SystemPacketType.GAME_INTERRUPTED: {
-      const store = useGameStore.getState();
-      store.resetGameState();
-      store.resetFlappyState();
-      store.setGameStarted(false);
-      store.setScreen('lobby');
-      store.setConnectionError({ message: packet.message });
-      bgmManager.pause();
-      break;
-    }
-
     case SystemPacketType.ROOM_UPDATE: {
       // update global store (clientHandler runs outside React)
       const roomPacket = packet as RoomUpdatePacket;
@@ -160,6 +146,14 @@ export const handleServerPacket = (packet: ServerPacket) => {
 
     case SystemPacketType.TIME_END: {
       const store = useGameStore.getState();
+      const timer = store.gameTimer;
+      store.setGameTimer({
+        limitTime: timer?.limitTime ?? 0,
+        serverStartTime: timer?.serverStartTime ?? Date.now(),
+        endsAt: Date.now(),
+        remainingMs: 0,
+        receivedAt: performance.now(),
+      });
       store.setGameResults(packet.results);
       store.setGameStarted(false);
       sfxManager.play('appleGameEnd');
@@ -250,6 +244,13 @@ export const handleServerPacket = (packet: ServerPacket) => {
     }
 
     // Flappy 패킷
+    case FlappyBirdPacketType.FLAPPY_START_COUNTDOWN: {
+      window.dispatchEvent(
+        new CustomEvent('flappy:start_countdown', { detail: packet }),
+      );
+      break;
+    }
+
     case FlappyBirdPacketType.FLAPPY_WORLD_STATE: {
       const store = useGameStore.getState();
       store.setFlappyWorldState(
@@ -257,21 +258,7 @@ export const handleServerPacket = (packet: ServerPacket) => {
         packet.pipes,
         packet.tick,
         packet.cameraX,
-        packet.lastProcessedInputSeqs,
-        packet.roundId,
-        packet.physicsSeed,
-        packet.lastFlapTicks,
       );
-      break;
-    }
-
-    case FlappyBirdPacketType.FLAPPY_INPUT_APPLIED: {
-      // 구버전 클라이언트 호환용 패킷. 현재 렌더링은 서버 좌표만 사용한다.
-      break;
-    }
-
-    case FlappyBirdPacketType.FLAPPY_CLOCK_PONG: {
-      // 구버전 클라이언트 호환용 패킷. 현재 클라이언트는 clock 예측을 하지 않는다.
       break;
     }
 
@@ -315,10 +302,6 @@ export const handleServerPacket = (packet: ServerPacket) => {
         packet.pipes,
         packet.tick,
         packet.cameraX,
-        packet.lastProcessedInputSeqs,
-        packet.roundId,
-        packet.physicsSeed,
-        packet.lastFlapTicks,
       );
       store.setFlappyScore(packet.score);
 

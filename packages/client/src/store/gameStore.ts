@@ -115,10 +115,6 @@ interface GameState {
   flappyPipes: FlappyPipeData[];
   flappyServerTick: number;
   flappyCameraX: number;
-  flappyLastProcessedInputSeqs: number[];
-  flappyRoundId: string | null;
-  flappyPhysicsSeed: number;
-  flappyLastFlapTicks: number[];
   flappyScore: number;
   isFlappyGameOver: boolean;
   flappyGameOverData: {
@@ -135,10 +131,6 @@ interface GameState {
     pipes: FlappyPipeData[],
     tick: number,
     cameraX: number,
-    lastProcessedInputSeqs: number[],
-    roundId?: string,
-    physicsSeed?: number,
-    lastFlapTicks?: number[],
   ) => void;
   setFlappyScore: (score: number) => void;
   setFlappyGameOver: (data: {
@@ -243,34 +235,17 @@ export const useGameStore = create<GameState>()(
     flappyPipes: [],
     flappyServerTick: 0,
     flappyCameraX: 0,
-    flappyLastProcessedInputSeqs: [],
-    flappyRoundId: null,
-    flappyPhysicsSeed: 0,
-    flappyLastFlapTicks: [],
     flappyScore: 0,
     isFlappyGameOver: false,
     flappyGameOverData: null,
 
     // FlappyBird 액션
-    setFlappyWorldState: (
-      birds,
-      pipes,
-      tick,
-      cameraX,
-      lastProcessedInputSeqs,
-      roundId,
-      physicsSeed,
-      lastFlapTicks,
-    ) =>
+    setFlappyWorldState: (birds, pipes, tick, cameraX) =>
       set({
         flappyBirds: birds,
         flappyPipes: pipes,
         flappyServerTick: tick,
         flappyCameraX: cameraX,
-        flappyLastProcessedInputSeqs: lastProcessedInputSeqs,
-        flappyRoundId: roundId ?? null,
-        flappyPhysicsSeed: physicsSeed ?? 0,
-        flappyLastFlapTicks: lastFlapTicks ?? [],
       }),
     setFlappyScore: (score) => set({ flappyScore: score }),
     setFlappyGameOver: (data) =>
@@ -293,10 +268,6 @@ export const useGameStore = create<GameState>()(
         flappyPipes: [],
         flappyServerTick: 0,
         flappyCameraX: 0,
-        flappyLastProcessedInputSeqs: [],
-        flappyRoundId: null,
-        flappyPhysicsSeed: 0,
-        flappyLastFlapTicks: [],
         flappyScore: 0,
         isFlappyGameOver: false,
         flappyGameOverData: null,

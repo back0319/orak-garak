@@ -1,186 +1,122 @@
 # 다같이 오락가락 (Orak Garak)
 
-React, Phaser, TypeScript로 만든 최대 4인용 웹 게임입니다. 정적 앱과
-멀티플레이 서버를 하나의 Cloudflare Worker로 배포하고, 방마다 하나의
-Durable Object가 권위 서버 상태를 관리합니다.
+React/Phaser 프론트엔드와 Node.js/Socket.IO 서버로 구성된 최대 4인용 웹 게임입니다.
 
-## 📋 사전 요구사항
+- 프론트엔드: Vercel (`https://orak-garak.vercel.app`)
+- 백엔드: Azure Container Apps 한국 중부 리전
+- 게임: 사과게임, 플래피 버드, 지뢰찾기
+- 방 상태: 단일 서버 프로세스의 메모리(서버 재시작 시 초기화)
 
-프로젝트를 실행하기 전에 다음 소프트웨어가 설치되어 있어야 합니다:
+## 로컬 실행
 
-- **Node.js** (v24 이상)
-  - [Node.js 공식 사이트](https://nodejs.org/)에서 다운로드
-  - 설치 확인: `node --version`
-- **pnpm** (패키지 매니저)
-  - 설치: `npm install -g pnpm`
-  - 설치 확인: `pnpm --version`
-- **Git** (저장소 클론용)
-  - [Git 공식 사이트](https://git-scm.com/)에서 다운로드
-
-## 🚀 프로젝트 실행 방법
-
-### 1. 저장소 클론
+Node.js 24와 pnpm 9.12.3을 사용합니다.
 
 ```bash
 git clone https://github.com/back0319/orak-garak.git
 cd orak-garak
+corepack enable
+pnpm install --frozen-lockfile
 ```
 
-### 2. 의존성 설치
-
-프로젝트 루트 디렉토리에서 다음 명령어를 실행하세요:
+터미널 두 개에서 서버와 클라이언트를 실행합니다.
 
 ```bash
-pnpm install
+pnpm dev:server
 ```
-
-이 명령어는 다음을 설치합니다:
-
-- React 19.2
-- Phaser 3.90
-- TypeScript 5.9
-- Vite 개발 서버
-- Cloudflare Vite 플러그인과 Wrangler
-- 기타 필요한 개발 도구
-
-### 3. 로컬 통합 개발 서버 실행
 
 ```bash
 pnpm dev
 ```
 
-서버가 실행되면 터미널에 다음과 같은 메시지가 표시됩니다:
+클라이언트는 기본적으로 `packages/client/.env.example`과 같이
+`http://localhost:3000`의 서버에 연결합니다. 로컬 설정이 필요하면
+`packages/client/.env.local`을 만들고 아래 값을 넣습니다.
 
+```dotenv
+VITE_SERVER_URL=http://localhost:3000
 ```
-VITE v7.2.4  ready in XXX ms
 
-➜  Local:   http://localhost:5173/
-➜  Network: use --host to expose
+브라우저에서 `http://localhost:5173`을 엽니다. 서버 상태는
+`http://localhost:3000/health`에서 확인할 수 있습니다.
+
+## 주요 명령어
+
+| 명령어 | 설명 |
+| --- | --- |
+| `pnpm dev` | Vite 클라이언트 실행 |
+| `pnpm dev:server` | Socket.IO 서버 실행 |
+| `pnpm build` | Vercel용 프론트엔드 빌드 |
+| `pnpm build:server` | Node 서버 번들 생성 |
+| `pnpm type-check` | 전체 TypeScript 검사 |
+| `pnpm test:server` | 서버와 게임 동작 테스트 |
+| `pnpm check:deploy` | 타입, 테스트, 양쪽 빌드 배포 게이트 |
+
+## 배포 구조
+
+### Azure 백엔드
+
+루트 `Dockerfile`은 서버만 빌드하는 멀티스테이지 이미지입니다. Azure 구성은
+`infra/azure/main.bicep`에 선언되어 있습니다.
+
+- Region: `koreacentral`
+- Container App: `orak-garak-server`
+- CPU/Memory: 0.25 vCPU / 0.5 GiB
+- Scale: 최소 1개, 최대 1개 replica
+- Ingress: 외부 HTTPS, WebSocket 지원
+- Health check: `GET /health`
+
+`main` 브랜치에서 서버, 공통 패키지, Docker 또는 Azure 구성이 바뀌면
+`.github/workflows/azure-backend.yml`이 다음을 수행합니다.
+
+1. 타입 검사, 서버 테스트와 빌드
+2. `ghcr.io/back0319/orak-garak-server:<commit-sha>` 이미지 게시
+3. GitHub OIDC로 Azure 로그인
+4. Bicep으로 Container App 생성 또는 갱신
+
+GHCR의 `orak-garak-server` 패키지는 최초 이미지 게시 후 한 번만 Public으로
+설정해야 합니다. GitHub 저장소의 Actions secrets에는 다음 값을 등록합니다.
+
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+
+장기 Azure 비밀키는 사용하지 않습니다. OIDC 자격 증명의 subject는
+`repo:back0319/orak-garak:ref:refs/heads/main`으로 제한합니다.
+
+### Vercel 프론트엔드
+
+Vercel에서 `back0319/orak-garak` 저장소를 연결하고 프로젝트 이름을
+`orak-garak`으로 설정합니다. 루트 `vercel.json`이 pnpm 설치, Vite 빌드와 SPA
+rewrite를 담당합니다.
+
+Production과 Preview 환경 모두 아래 환경 변수를 설정합니다.
+
+```dotenv
+VITE_SERVER_URL=https://<azure-container-app-fqdn>
 ```
 
-### 3-1. 브라우저에서 확인
+`main`은 Production, 다른 브랜치와 PR은 Preview로 배포됩니다. 서버 CORS는
+운영 주소 `https://orak-garak.vercel.app`, Vercel Preview 주소와 로컬 개발
+주소만 허용합니다.
 
-브라우저를 열고 `http://localhost:5173/`로 접속하세요.
+## 프로젝트 구조
 
-Vite가 React 앱과 Cloudflare Worker/Durable Object 런타임을 함께 실행합니다.
-
-## 📦 주요 명령어
-
-| 명령어              | 설명                               |
-| ------------------- | ---------------------------------- |
-| `pnpm install`      | 프로젝트 의존성 설치               |
-| `pnpm dev`          | 개발 서버 실행 (포트 5173)         |
-| `pnpm build`        | 모노레포 패키지 프로덕션 빌드 생성 |
-| `pnpm type-check`   | 공통·Worker TypeScript 검사        |
-| `pnpm test:worker`  | Workers Vitest 테스트 실행         |
-| `pnpm check:deploy` | 타입·테스트·프로덕션 빌드 게이트   |
-| `pnpm deploy`       | 빌드 후 Cloudflare Workers 배포    |
-| `pnpm preview`      | 빌드된 앱 미리보기                 |
-| `pnpm lint`         | ESLint로 코드 검사                 |
-| `pnpm format`       | Prettier로 코드 포맷팅             |
-| `pnpm format:check` | 코드 포맷 검사                     |
-
-## 🏗️ 프로젝트 구조
-
-```
+```text
 orak-garak/
+├── .github/workflows/azure-backend.yml
+├── infra/azure/main.bicep
 ├── packages/
-│   ├── client/             # 프론트엔드 (React + Phaser)
-│   │   ├── src/
-│   │   │   ├── game/       # Phaser 게임 관련 파일
-│   │   │   │   ├── GameContainer.tsx
-│   │   │   │   ├── PhaserGame.tsx
-│   │   │   │   └── scene/  # Phaser 씬 파일들
-│   │   │   ├── App.tsx     # React 메인 컴포넌트
-│   │   │   └── main.tsx    # 앱 진입점
-│   │   ├── public/         # 정적 파일 (이미지, 사운드 등)
-│   │   └── package.json
-│   ├── common/             # 공통 코드 (타입, 유틸리티 등)
-│   │   └── package.json
-│   └── server/             # 백엔드 서버
-│       └── package.json
-├── package.json            # 루트 패키지 설정
-├── pnpm-workspace.yaml     # pnpm 워크스페이스 설정
-└── README.md
+│   ├── client/       # React, Phaser, Socket.IO client
+│   ├── common/       # 공통 패킷과 타입
+│   └── server/       # Node.js, Socket.IO, 게임 판정
+├── Dockerfile
+└── vercel.json
 ```
 
-## 🛠️ 기술 스택
+## 운영 제약
 
-### Frontend (Client)
-
-- **React 19.2** - UI 컴포넌트 및 상태 관리
-- **TypeScript 5.9** - 타입 안정성
-- **Phaser 3.90** - 2D 게임 엔진 (Canvas 렌더링)
-- **Vite 7.2** - 빌드 도구 및 개발 서버
-- **표준 WebSocket** - JSON 실시간 통신
-- **Cloudflare Workers + Durable Objects** - 방 단위 멀티플레이 서버
-- **NES.css** - 레트로 스타일 UI
-
-### Shared
-
-- **Zustand** - 상태 관리 라이브러리
-
-### Development Tools
-
-- **pnpm** - 빠르고 효율적인 패키지 매니저
-- **Prettier** - 코드 포맷터
-- **ESLint** - 코드 린터
-
-## ☁️ Cloudflare 배포
-
-최초 한 번 Cloudflare 계정을 연결한 뒤 배포합니다.
-
-```bash
-pnpm --filter ./packages/client exec wrangler login
-pnpm deploy
-```
-
-배포 주소는 `orak-garak.<account>.workers.dev` 형식입니다. 정적 Assets와
-API/WebSocket이 같은 origin을 사용하므로 커스텀 도메인을 연결해도 클라이언트
-환경 변수 변경은 필요하지 않습니다.
-
-## 🔧 문제 해결
-
-### 의존성 설치 오류
-
-`pnpm-lock.yaml`과 `node_modules`를 삭제 후 재설치:
-
-```bash
-# Windows PowerShell
-Remove-Item -Recurse -Force node_modules, pnpm-lock.yaml
-pnpm install
-
-# macOS/Linux
-rm -rf node_modules pnpm-lock.yaml
-pnpm install
-```
-
-### 캐시 문제
-
-브라우저 캐시를 지우거나 시크릿 모드로 접속해보세요.
-
-pnpm 캐시를 지우려면:
-
-```bash
-pnpm store prune
-```
-
-## 📝 개발 시작하기
-
-1. **새로운 씬 추가**: `packages/client/src/game/scene/` 폴더에 새 씬 파일 생성
-2. **게임 에셋 추가**: `packages/client/public/assets/` 폴더에 이미지, 사운드 등 추가
-3. **React 컴포넌트**: `packages/client/src/` 폴더에서 UI 컴포넌트 관리
-4. **공통 코드**: `packages/common/` 폴더에 타입 정의 및 공통 유틸리티 작성
-5. **서버 개발**: `packages/server/` 폴더에서 백엔드 로직 작성
-
-## 👥 협업 가이드
-
-1. 작업 시작 전 항상 최신 코드를 pull
-2. 기능별로 브랜치 생성
-3. 커밋 전 `pnpm format` 및 `pnpm lint`로 코드 검사
-4. Pull Request로 코드 리뷰 후 병합
-
-## 📞 도움이 필요하면
-
-- 프로젝트 이슈 등록
-- 팀원에게 문의
+- 방과 게임 상태는 Node 프로세스 메모리에만 보관됩니다.
+- 빈 방은 마지막 사용 후 1시간 뒤 제거됩니다.
+- 배포나 서버 재시작 시 진행 중인 방은 사라집니다.
+- replica를 한 개로 고정하므로 별도 세션 고정이나 분산 저장소가 필요 없습니다.
+- 실제 두 기기 테스트가 끝날 때까지 기존 Cloudflare 배포는 롤백용으로 유지합니다.

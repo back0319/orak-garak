@@ -1,72 +1,133 @@
-import type { GameRoom } from './network/gameRoom';
+import { createServer, type Server as HttpServer } from 'node:http';
+import { Server, type Socket } from 'socket.io';
+import type { ServerPacket } from '@main-game/common';
+import {
+  handleClientPacket,
+  handleConnection,
+  handleDisconnect,
+} from './network/serverHandler';
 
-export { GameRoom } from './network/gameRoom';
+const DEFAULT_ORIGINS = [
+  'https://orak-garak.vercel.app',
+  'http://localhost:5173',
+];
 
-export interface Env {
-  GAME_ROOMS: DurableObjectNamespace<GameRoom>;
+export function isAllowedOrigin(origin?: string): boolean {
+  if (!origin) return true;
+
+  const configured = (process.env.ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if ([...DEFAULT_ORIGINS, ...configured].includes(origin)) {
+    return true;
+  }
+
+  return /^https:\/\/orak-garak(?:-[a-z0-9-]+)*\.vercel\.app$/.test(origin);
 }
 
-const ROOM_ID_PATTERN = /^[a-z0-9]{10}$/;
-const ROOM_ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyz';
-
-function createRoomId(): string {
-  const bytes = new Uint8Array(10);
-  crypto.getRandomValues(bytes);
-  return Array.from(
-    bytes,
-    (value) => ROOM_ALPHABET[value % ROOM_ALPHABET.length],
-  ).join('');
+export interface GameServer {
+  httpServer: HttpServer;
+  io: Server;
 }
 
-export default {
-  async fetch(request, env): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (request.method === 'GET' && url.pathname === '/api/health') {
-      return Response.json({
-        ok: true,
-        service: 'orak-garak',
-        runtime: 'cloudflare-workers',
-      });
+export function createGameServer(): GameServer {
+  const httpServer = createServer((request, response) => {
+    if (request.method === 'GET' && request.url === '/health') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          ok: true,
+          service: 'orak-garak-server',
+          timestamp: new Date().toISOString(),
+        }),
+      );
+      return;
     }
 
-    if (request.method === 'POST' && url.pathname === '/api/rooms') {
-      return Response.json({ roomId: createRoomId() }, { status: 201 });
-    }
+    response.writeHead(404, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ error: 'not_found' }));
+  });
 
-    const match = url.pathname.match(/^\/ws\/rooms\/([^/]+)$/);
-    if (request.method === 'GET' && match) {
-      const roomId = match[1];
-      if (!ROOM_ID_PATTERN.test(roomId)) {
-        return Response.json({ error: 'invalid_room_id' }, { status: 400 });
-      }
-      if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
-        return Response.json(
-          { error: 'websocket_upgrade_required' },
-          { status: 426 },
+  const io = new Server(httpServer, {
+    cors: {
+      origin(origin, callback) {
+        callback(
+          isAllowedOrigin(origin) ? null : new Error('origin_not_allowed'),
+          isAllowedOrigin(origin),
         );
+      },
+      methods: ['GET', 'POST'],
+    },
+    transports: ['websocket'],
+    maxHttpBufferSize: 16 * 1024,
+  });
+
+  io.on('connection', (socket: Socket) => {
+    handleConnection(socket);
+    const recentMessages: number[] = [];
+
+    socket.onAny((eventName, data) => {
+      const now = Date.now();
+      while (recentMessages.length > 0 && recentMessages[0] < now - 1000) {
+        recentMessages.shift();
       }
 
-      const origin = request.headers.get('Origin');
-      if (origin) {
-        try {
-          if (new URL(origin).host !== url.host) {
-            return Response.json(
-              { error: 'origin_not_allowed' },
-              { status: 403 },
-            );
-          }
-        } catch {
-          return Response.json(
-            { error: 'origin_not_allowed' },
-            { status: 403 },
-          );
-        }
+      if (recentMessages.length >= 120) {
+        socket.emit('SYSTEM_MESSAGE', {
+          message: '메시지 전송 속도가 너무 빠릅니다.',
+        });
+        socket.disconnect(true);
+        return;
       }
 
-      return env.GAME_ROOMS.getByName(roomId).fetch(request);
-    }
+      recentMessages.push(now);
+      const packet = { type: eventName, ...data } as ServerPacket;
+      handleClientPacket(io, socket, packet);
+    });
 
-    return new Response('Not found', { status: 404 });
-  },
-} satisfies ExportedHandler<Env>;
+    socket.on('disconnect', () => {
+      handleDisconnect(socket.id);
+    });
+  });
+
+  return { httpServer, io };
+}
+
+export async function startGameServer(
+  port = Number(process.env.PORT) || 3000,
+): Promise<GameServer> {
+  const server = createGameServer();
+
+  await new Promise<void>((resolve, reject) => {
+    server.httpServer.once('error', reject);
+    server.httpServer.listen(port, '0.0.0.0', () => {
+      server.httpServer.off('error', reject);
+      resolve();
+    });
+  });
+
+  console.log(`Game server listening on port ${port}`);
+  return server;
+}
+
+if (!process.env.VITEST) {
+  void startGameServer().then((server) => {
+    let closing = false;
+
+    const shutdown = async (signal: string) => {
+      if (closing) return;
+      closing = true;
+      console.log(`Received ${signal}, shutting down`);
+      server.io.disconnectSockets(true);
+      await new Promise<void>((resolve) =>
+        server.httpServer.close(() => resolve()),
+      );
+      process.exit(0);
+    };
+
+    process.on('SIGINT', () => void shutdown('SIGINT'));
+    process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  });
+}
