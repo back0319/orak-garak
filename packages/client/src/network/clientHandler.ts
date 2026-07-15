@@ -252,6 +252,7 @@ export const handleServerPacket = (packet: ServerPacket) => {
         packet.pipes,
         packet.tick,
         packet.cameraX,
+        packet.lastProcessedInputSeqs,
       );
       break;
     }
@@ -296,6 +297,7 @@ export const handleServerPacket = (packet: ServerPacket) => {
         packet.pipes,
         packet.tick,
         packet.cameraX,
+        packet.lastProcessedInputSeqs,
       );
       store.setFlappyScore(packet.score);
 

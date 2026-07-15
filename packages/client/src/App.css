@@ -56,7 +56,7 @@
 /* 나머지는 원래 내용 */
 
 .App {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -64,6 +64,56 @@
   background-color: #ffffff;
   color: white;
   width: 100%;
+}
+
+.game-screen {
+  position: relative;
+  height: var(--app-height, 100dvh);
+  width: 100vw;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.game-hud {
+  position: absolute;
+  top: max(6px, env(safe-area-inset-top));
+  left: max(8px, env(safe-area-inset-left));
+  right: max(8px, env(safe-area-inset-right));
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+
+.game-description-bar {
+  max-width: min(90vw, 900px);
+  padding: 3px 10px;
+  color: white;
+  background: rgba(33, 37, 41, 0.72);
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.game-player-hud {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 100%;
+  margin-top: 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  pointer-events: auto;
+}
+
+.game-player-hud::-webkit-scrollbar {
+  display: none;
 }
 
 .App-header {
@@ -80,9 +130,205 @@
 
 .game-container {
   display: flex;
-  justify-content: flex-start;
-  align-items: flex-start;
+  justify-content: center;
+  align-items: center;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
   padding: 0;
+  overflow: hidden;
+}
+
+.phaser-viewport-shell {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+}
+
+.phaser-viewport-shell canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  touch-action: none;
+}
+
+.orientation-lock {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: white;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  text-align: center;
+}
+
+.orientation-lock span {
+  font-size: 54px;
+}
+
+.orientation-lock strong {
+  font-size: 26px;
+}
+
+.orientation-lock small {
+  font-size: 15px;
+}
+
+.game-result-overlay {
+  width: 100vw !important;
+  height: 100dvh !important;
+  padding: max(12px, env(safe-area-inset-top))
+    max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
+  box-sizing: border-box;
+}
+
+.game-result-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(900px, 92vw) !important;
+  max-width: 92vw !important;
+  max-height: calc(100dvh - 24px) !important;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.game-result-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.game-result-actions {
+  flex: 0 0 auto;
+}
+
+.game-result-actions button {
+  min-height: 44px;
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .game-hud {
+    top: max(3px, env(safe-area-inset-top));
+    left: max(5px, env(safe-area-inset-left));
+    right: max(5px, env(safe-area-inset-right));
+    align-items: flex-start;
+  }
+
+  .game-description-bar {
+    align-self: center;
+    max-width: 72vw;
+    padding: 2px 7px;
+    font-size: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .game-player-hud {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 4px;
+    margin-top: 3px;
+  }
+
+  .player-card-shell {
+    width: 96px !important;
+    min-width: 96px !important;
+    max-width: 96px !important;
+  }
+
+  .player-card-content {
+    min-height: 48px !important;
+    height: 48px !important;
+    padding: 3px 4px !important;
+    gap: 0 !important;
+  }
+
+  .player-card-content img {
+    height: 20px !important;
+  }
+
+  .player-card-content > div {
+    min-height: 16px !important;
+  }
+
+  .player-card-content span {
+    font-size: 12px !important;
+  }
+
+  .sound-setting-container {
+    position: fixed;
+    right: max(5px, env(safe-area-inset-right));
+    bottom: max(5px, env(safe-area-inset-bottom));
+    z-index: 30;
+    width: 112px;
+    padding: 3px;
+    gap: 0;
+    background: rgba(255, 255, 255, 0.88);
+  }
+
+  .sound-control-row {
+    min-height: 44px;
+    gap: 2px;
+  }
+
+  .sound-icon-wrapper {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .sound-label {
+    display: none;
+  }
+
+  .sound-icon {
+    width: 20px;
+    height: 20px;
+  }
+
+  .game-result-dialog {
+    width: min(760px, 92vw) !important;
+    max-height: calc(100dvh - 16px) !important;
+    padding: 10px 16px !important;
+  }
+
+  .game-result-dialog h1 {
+    margin: 0 0 6px !important;
+    font-size: clamp(24px, 8vh, 38px) !important;
+  }
+
+  .game-result-scroll {
+    margin: 4px 0 !important;
+  }
+
+  .game-result-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(120px, 1fr));
+    gap: 10px !important;
+    width: min(420px, 100%);
+    margin: 7px auto 0 !important;
+  }
+
+  .game-result-actions button {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 44px !important;
+    padding: 6px 12px !important;
+    font-size: 16px !important;
+  }
+
+  .flappy-result-dialog .game-result-scroll div {
+    margin-bottom: 5px !important;
+  }
 }
 
 #phaser-game {

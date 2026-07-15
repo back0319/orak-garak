@@ -104,6 +104,7 @@ interface GameState {
   flappyPipes: FlappyPipeData[];
   flappyServerTick: number;
   flappyCameraX: number;
+  flappyLastProcessedInputSeqs: number[];
   flappyScore: number;
   isFlappyGameOver: boolean;
   flappyGameOverData: {
@@ -120,6 +121,7 @@ interface GameState {
     pipes: FlappyPipeData[],
     tick: number,
     cameraX: number,
+    lastProcessedInputSeqs: number[],
   ) => void;
   setFlappyScore: (score: number) => void;
   setFlappyGameOver: (data: {
@@ -216,17 +218,25 @@ export const useGameStore = create<GameState>()(
     flappyPipes: [],
     flappyServerTick: 0,
     flappyCameraX: 0,
+    flappyLastProcessedInputSeqs: [],
     flappyScore: 0,
     isFlappyGameOver: false,
     flappyGameOverData: null,
 
     // FlappyBird 액션
-    setFlappyWorldState: (birds, pipes, tick, cameraX) =>
+    setFlappyWorldState: (
+      birds,
+      pipes,
+      tick,
+      cameraX,
+      lastProcessedInputSeqs,
+    ) =>
       set({
         flappyBirds: birds,
         flappyPipes: pipes,
         flappyServerTick: tick,
         flappyCameraX: cameraX,
+        flappyLastProcessedInputSeqs: lastProcessedInputSeqs,
       }),
     setFlappyScore: (score) => set({ flappyScore: score }),
     setFlappyGameOver: (data) =>
@@ -249,6 +259,7 @@ export const useGameStore = create<GameState>()(
         flappyPipes: [],
         flappyServerTick: 0,
         flappyCameraX: 0,
+        flappyLastProcessedInputSeqs: [],
         flappyScore: 0,
         isFlappyGameOver: false,
         flappyGameOverData: null,

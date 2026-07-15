@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { GameContainer } from './game/GameContainer';
 import { BGMProvider, useBGMContext } from './contexts/BGMContext';
 import { SFXProvider, useSFXContext } from './contexts/SFXContext';
-import { UserProvider, useUser } from './contexts/UserContext';
+import { UserProvider } from './contexts/UserContext';
 import { useGameStore } from './store/gameStore';
 
 import PlayerCard from './components/PlayerCard';
@@ -17,8 +17,7 @@ import {
   DEFAULT_MINESWEEPER_PRESET,
 } from './game/types/minesweeper.types';
 import { GameType } from '../../common/src/config';
-import type { PlayerId, GameOverEvent } from './game/types/flappybird.types';
-import { CONSTANTS } from './game/types/common';
+import type { PlayerId } from './game/types/flappybird.types';
 import { SystemPacketType, type ServerPacket } from '../../common/src/packets';
 import { GAME_DESCRIPTIONS } from './constants/gameDescriptions';
 import flappyBird1 from './assets/images/flappybird_1.png';
@@ -28,6 +27,7 @@ import flappyBird4 from './assets/images/flappybird_4.png';
 
 import './App.css';
 import { socketManager } from './network/socket';
+import { useViewport } from './hooks/useViewport';
 
 const FLAPPY_BIRD_SPRITES = [
   flappyBird1,
@@ -45,6 +45,7 @@ const COLOR_TO_SPRITE_INDEX: Record<string, number> = {
 };
 
 function AppContent() {
+  const viewport = useViewport();
   const testPlayerCount = 4;
   const { pause, reset } = useBGMContext();
   const { playSFX } = useSFXContext();
@@ -60,7 +61,6 @@ function AppContent() {
   const gameReady = useGameStore((s) => s.gameReady);
   const setGameReady = useGameStore((s) => s.setGameReady);
   const isGameStarted = useGameStore((s) => s.isGameStarted);
-  const setGameStarted = useGameStore((s) => s.setGameStarted);
   const gameRef = useRef<Phaser.Game | null>(null);
 
   // 플래피버드 관련 상태 - store에서 직접 구독
@@ -115,14 +115,16 @@ function AppContent() {
   // 게임 컨테이너 재마운트를 위한 세션 ID (gameStore에서 관리)
   const gameSessionId = useGameStore((s) => s.gameSessionId);
 
-  const handleGameReady = useCallback((game: Phaser.Game) => {
-    console.log('Phaser game is ready!', game);
-    gameRef.current = game;
-    setGameReady(true);
-  }, []);
+  const handleGameReady = useCallback(
+    (game: Phaser.Game) => {
+      console.log('Phaser game is ready!', game);
+      gameRef.current = game;
+      setGameReady(true);
+    },
+    [setGameReady],
+  );
 
   // 게임 종료 시 BGM/SFX 처리 (store에서 isFlappyGameOver 변경 감지)
-  const resetFlappyState = useGameStore((s) => s.resetFlappyState);
   // handleGameEnd는 현재 GameContainer에서 사용하지 않으므로 주석 처리
   // const handleGameEnd = useCallback(
   //   (data: GameEndEvent) => {
@@ -176,7 +178,7 @@ function AppContent() {
         console.error('Minesweeper score update handler error:', error);
       }
     },
-    [],
+    [setPlayers],
   );
 
   // 게임 세션이 새로 시작될 때(리플레이 포함) 관련 상태 초기화
@@ -344,8 +346,11 @@ function AppContent() {
     }
   }, [isGameStarted, pause, reset]);
 
-  const gameResultRatio =
-    (window as Window & { __GAME_RATIO?: number }).__GAME_RATIO || 1;
+  const gameResultRatio = Math.min(
+    1,
+    viewport.width / 1440,
+    viewport.height / 900,
+  );
 
   // 랜딩 페이지 표시
   if (screen === 'landing') {
@@ -358,66 +363,21 @@ function AppContent() {
   }
 
   return (
-    <div
-      className="App"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100vh',
-        width: '100vw',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        overflow: 'hidden',
-        margin: 0,
-        padding: 0,
-      }}
-    >
-      <header
-        className="App-header"
-        style={{
-          width: '100%',
-          textAlign: 'center',
-          margin: '0',
-          flexShrink: 0,
-        }}
-      />
+    <div className="App game-screen">
+      <header className="App-header" />
 
       {/* <SocketCounter /> */}
 
       {/* 상단 영역 */}
-      <div
-        style={{
-          width: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flex: 1,
-          minHeight: 0,
-        }}
-      >
+      <div className="game-hud">
         {/* 게임 설명 */}
         {descriptionKey && GAME_DESCRIPTIONS[descriptionKey] && (
-          <div
-            style={{
-              textAlign: 'center',
-              padding: '4px 0',
-              color: 'rgba(255, 255, 255, 0.9)',
-              fontSize: '14px',
-              fontWeight: 500,
-            }}
-          >
+          <div className="game-description-bar">
             {GAME_DESCRIPTIONS[descriptionKey]}
           </div>
         )}
 
-        <div
-          style={{
-            ...playerListStyle,
-            marginLeft: `0px`,
-            position: 'relative',
-            marginTop: '0px',
-          }}
-        >
+        <div className="game-player-hud">
           {/* 사과게임: 4개 플레이어카드 */}
           {/* TODO: score는 추후 ReportCard 통합 후 재작업 예정 */}
           {currentGameType === GameType.APPLE_GAME &&
@@ -480,20 +440,7 @@ function AppContent() {
       </div>
 
       {/* 하단 영역 - 화면 하단에 고정 */}
-      <main
-        className="game-container"
-        style={{
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'flex-end',
-          width: '100%',
-          flexShrink: 0,
-          margin: 0,
-          padding: 0,
-          maxHeight: '80vh',
-          overflow: 'hidden',
-        }}
-      >
+      <main className="game-container">
         {/* 게임 오버 후에도 씬 유지 (결과 모달이 씬 위에 표시됨) */}
         {currentGameType && ( // todo/merge: isGameStarted && !flappyGameEnded && currentGameType && (
           <GameContainer
@@ -554,15 +501,6 @@ function AppContent() {
 //             }
 //           />
 //         )}
-
-const playerListStyle: React.CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '8px',
-  marginTop: '0px',
-  alignSelf: 'center',
-  justifyContent: 'center',
-};
 
 export default function App() {
   return (

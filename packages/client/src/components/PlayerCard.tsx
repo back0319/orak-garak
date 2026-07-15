@@ -11,7 +11,7 @@ interface PlayerCardProps {
   extraContent?: React.ReactNode;
 }
 
-export const getNameFontSize = (nameLength: number): string => {
+const getNameFontSize = (nameLength: number): string => {
   if (nameLength <= 4) return '24px';
   if (nameLength <= 6) return '20px';
   return '18px'; // 7-8자
@@ -31,9 +31,9 @@ export default function PlayerCard({
   const safeScore = typeof score === 'number' ? score : 0;
 
   return (
-    <div style={cardWrapperStyle}>
+    <div className="player-card-shell" style={cardWrapperStyle}>
       <div
-        className="nes-container is-centered"
+        className="nes-container is-centered player-card-content"
         style={{
           ...contentLayout,
           padding: '12px 8px 4px',

@@ -285,7 +285,10 @@ const BaseRankedResult: React.FC<BaseRankedResultProps> = ({
   const playerRanks = result.reduce<number[]>((ranks, player, idx) => {
     if (idx === 0) return [1];
     const prevScore = result[idx - 1].reportCard.score;
-    return [...ranks, player.reportCard.score === prevScore ? ranks[idx - 1] : idx + 1];
+    return [
+      ...ranks,
+      player.reportCard.score === prevScore ? ranks[idx - 1] : idx + 1,
+    ];
   }, []);
 
   const playerSublines = renderPlayerSubline
@@ -311,9 +314,9 @@ const BaseRankedResult: React.FC<BaseRankedResultProps> = ({
         }
       `}
       </style>
-      <div style={styles.overlay()}>
+      <div className="game-result-overlay" style={styles.overlay()}>
         <div
-          className="nes-container is-rounded"
+          className="nes-container is-rounded game-result-dialog"
           style={{
             ...styles.container(),
             position: 'absolute',
@@ -323,7 +326,7 @@ const BaseRankedResult: React.FC<BaseRankedResultProps> = ({
           }}
         >
           <h1 style={styles.title()}>{title}</h1>
-          <div style={styles.rankContainer()}>
+          <div className="game-result-scroll" style={styles.rankContainer()}>
             {result.map((player, idx) => {
               const height = getRankHeight(playerRanks[idx]) * ratio;
               const crown = getCrownProps(playerRanks[idx]);
@@ -386,7 +389,7 @@ const BaseRankedResult: React.FC<BaseRankedResultProps> = ({
               ))}
             </div>
           )}
-          <div style={styles.buttonContainer()}>
+          <div className="game-result-actions" style={styles.buttonContainer()}>
             {/* REPLAY 버튼 */}
             <div
               style={{ position: 'relative', display: 'inline-block' }}
