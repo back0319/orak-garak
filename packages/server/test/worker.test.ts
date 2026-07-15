@@ -8,6 +8,7 @@ import {
   SystemPacketType,
   getDefaultConfig,
   type GameConfig,
+  type FlappyBirdGamePreset,
 } from '@main-game/common';
 import {
   GameSession,
@@ -357,11 +358,30 @@ describe('Flappy client render simulation', () => {
       Math.abs(unacknowledged.y - authorityYAfterFrame),
     );
   });
+
+  it('predicts remote birds to the minimum-delay clock without a display buffer', () => {
+    const simulation = new FlappyRenderSimulation();
+    simulation.reset([bird()], 0);
+    simulation.applySnapshot(0, [bird()], [0], -1, 1_000, true);
+    simulation.applySnapshot(3, [bird({ x: 112 })], [0], -1, 1_070, true);
+
+    expect(simulation.getBirds()[0].x).toBeGreaterThan(112);
+    expect(simulation.getBirds()[0].x).toBeLessThanOrEqual(136);
+  });
+
+  it('hard resynchronizes instead of catching up an entire long frame stall', () => {
+    const simulation = new FlappyRenderSimulation();
+    simulation.reset([bird()], 0);
+    const afterStall = simulation.update(300, 300)[0];
+
+    expect(afterStall.x).toBe(100);
+    expect(afterStall.y).toBe(200);
+  });
 });
 
 describe('Flappy server input sequencing', () => {
   it('ignores duplicate and reversed inputs and keeps player acks isolated', () => {
-    const emitted: Array<{ event: string; data: any }> = [];
+    const emitted: Array<{ event: string; data: unknown }> = [];
     const socket: GameSocket = {
       id: 'p0',
       emit: (event, data) => emitted.push({ event, data }),
@@ -378,7 +398,9 @@ describe('Flappy server input sequencing', () => {
     session.addPlayer('p0', '첫째');
     session.addPlayer('p1', '둘째');
     const game = new FlappyBirdInstance(session);
-    game.initialize(getDefaultConfig(GameType.FLAPPY_BIRD) as any);
+    game.initialize(
+      getDefaultConfig(GameType.FLAPPY_BIRD) as FlappyBirdGamePreset,
+    );
 
     game.handlePacket(socket, 0, {
       type: FlappyBirdPacketType.FLAPPY_JUMP,
@@ -387,7 +409,10 @@ describe('Flappy server input sequencing', () => {
     game.handlePacket(socket, 0, {
       type: FlappyBirdPacketType.FLAPPY_REQUEST_SYNC,
     });
-    const firstSync = emitted.at(-1)!.data;
+    const firstSync = emitted.at(-1)!.data as {
+      lastProcessedInputSeqs: number[];
+      birds: Array<{ vy: number }>;
+    };
 
     game.handlePacket(socket, 0, {
       type: FlappyBirdPacketType.FLAPPY_JUMP,
@@ -400,7 +425,10 @@ describe('Flappy server input sequencing', () => {
     game.handlePacket(socket, 0, {
       type: FlappyBirdPacketType.FLAPPY_REQUEST_SYNC,
     });
-    const duplicateSync = emitted.at(-1)!.data;
+    const duplicateSync = emitted.at(-1)!.data as {
+      lastProcessedInputSeqs: number[];
+      birds: Array<{ vy: number }>;
+    };
 
     expect(firstSync.lastProcessedInputSeqs).toEqual([2, 0]);
     expect(duplicateSync.lastProcessedInputSeqs).toEqual([2, 0]);
