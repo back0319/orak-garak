@@ -46,7 +46,9 @@ class SocketManager {
       // 서버 측 또는 네트워크 문제로 인한 연결 끊김 처리
       // 'io client disconnect'는 클라이언트가 명시적으로 끊은 경우이므로 제외
       if (reason !== 'io client disconnect') {
-        const { setScreen, setConnectionError } = useGameStore.getState();
+        const { setScreen, setConnectionError, resetLobbyChat } =
+          useGameStore.getState();
+        resetLobbyChat();
         setConnectionError({ message: '서버와의 연결이 끊겨 랜딩페이지로 돌아왔습니다.' });
         setScreen('landing');
       }
@@ -64,6 +66,7 @@ class SocketManager {
   }
 
   async joinRoom(roomId: string, playerName: string): Promise<void> {
+    useGameStore.getState().resetLobbyChat();
     if (!this.socket) this.connect(SERVER_URL);
     const socket = this.socket;
     if (!socket) throw new Error('소켓을 생성하지 못했습니다.');

@@ -6,6 +6,7 @@ import type {
   PlayerData,
 } from '../../../common/src/common-type';
 import { type GameType, type GameConfig } from '../../../common/src/config';
+import type { LobbyChatMessage } from '../../../common/src/packets';
 
 // 드래그 영역 데이터 타입
 export interface DragAreaData {
@@ -57,6 +58,13 @@ interface GameState {
   selectedGameType?: GameType | null;
   gameConfig?: GameConfig | null;
   setGameConfig: (selected: GameType | null, cfg: GameConfig | null) => void;
+
+  lobbyChatMessages: LobbyChatMessage[];
+  lobbyChatError: string | null;
+  setLobbyChatHistory: (messages: LobbyChatMessage[]) => void;
+  addLobbyChatMessage: (message: LobbyChatMessage) => void;
+  setLobbyChatError: (message: string | null) => void;
+  resetLobbyChat: () => void;
 
   screen: 'landing' | 'lobby' | 'game';
   setScreen: (screen: 'landing' | 'lobby' | 'game') => void;
@@ -153,6 +161,8 @@ export const useGameStore = create<GameState>()(
     players: [] as PlayerData[],
     selectedGameType: null,
     gameConfig: null,
+    lobbyChatMessages: [],
+    lobbyChatError: null,
 
     screen: 'landing',
 
@@ -182,6 +192,20 @@ export const useGameStore = create<GameState>()(
     },
     setGameConfig: (selected: GameType | null, cfg: GameConfig | null) =>
       set({ selectedGameType: selected, gameConfig: cfg }),
+    setLobbyChatHistory: (messages) =>
+      set({ lobbyChatMessages: messages.slice(-50), lobbyChatError: null }),
+    addLobbyChatMessage: (message) =>
+      set((state) => {
+        if (state.lobbyChatMessages.some((item) => item.id === message.id)) {
+          return state;
+        }
+        return {
+          lobbyChatMessages: [...state.lobbyChatMessages, message].slice(-50),
+        };
+      }),
+    setLobbyChatError: (message) => set({ lobbyChatError: message }),
+    resetLobbyChat: () =>
+      set({ lobbyChatMessages: [], lobbyChatError: null }),
 
     setScreen: (screen: 'landing' | 'lobby' | 'game') => set({ screen }),
 

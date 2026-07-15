@@ -5,6 +5,7 @@ import {
   GameType,
   SystemPacketType,
   getDefaultConfig,
+  type LobbyChatMessage,
   type RoomUpdatePacket,
 } from '@main-game/common';
 import { createGameServer, type GameServer } from '../src/index';
@@ -174,5 +175,203 @@ describe('Socket.IO game server', () => {
       2500,
     );
     expect(worldPackets).toBeGreaterThan(0);
+  });
+
+  it('broadcasts lobby chat, keeps recent history, and rate limits spam', async () => {
+    const url = await start();
+    const host = await connect(url);
+    sockets.push(host);
+
+    const hostJoined = waitForEvent<RoomUpdatePacket>(
+      host,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    const hostHistory = waitForEvent<{ messages: LobbyChatMessage[] }>(
+      host,
+      SystemPacketType.LOBBY_CHAT_HISTORY,
+    );
+    host.emit(SystemPacketType.JOIN_ROOM, {
+      roomId: '',
+      playerName: 'host',
+    });
+    const roomId = (await hostJoined).roomId;
+    await expect(hostHistory).resolves.toEqual({ messages: [] });
+
+    const guest = await connect(url);
+    sockets.push(guest);
+    const guestJoined = waitForEvent<RoomUpdatePacket>(
+      guest,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    guest.emit(SystemPacketType.JOIN_ROOM, {
+      roomId,
+      playerName: 'guest',
+    });
+    await guestJoined;
+
+    const hostMessage = waitForEvent<{ message: LobbyChatMessage }>(
+      host,
+      SystemPacketType.LOBBY_CHAT_MESSAGE,
+    );
+    const guestMessage = waitForEvent<{ message: LobbyChatMessage }>(
+      guest,
+      SystemPacketType.LOBBY_CHAT_MESSAGE,
+    );
+    host.emit(SystemPacketType.LOBBY_CHAT_SEND, {
+      message: '  안녕하세요   모두  ',
+    });
+
+    const delivered = await hostMessage;
+    expect(delivered.message).toMatchObject({
+      playerName: 'host',
+      message: '안녕하세요 모두',
+    });
+    await expect(guestMessage).resolves.toEqual(delivered);
+
+    const lateGuest = await connect(url);
+    sockets.push(lateGuest);
+    const lateHistory = waitForEvent<{ messages: LobbyChatMessage[] }>(
+      lateGuest,
+      SystemPacketType.LOBBY_CHAT_HISTORY,
+    );
+    lateGuest.emit(SystemPacketType.JOIN_ROOM, {
+      roomId,
+      playerName: 'late',
+    });
+    await expect(lateHistory).resolves.toMatchObject({
+      messages: [{ message: '안녕하세요 모두' }],
+    });
+
+    host.emit(SystemPacketType.LOBBY_CHAT_SEND, { message: '두 번째' });
+    host.emit(SystemPacketType.LOBBY_CHAT_SEND, { message: '세 번째' });
+    const rateLimited = waitForEvent<{ message: string }>(
+      host,
+      SystemPacketType.LOBBY_CHAT_ERROR,
+    );
+    host.emit(SystemPacketType.LOBBY_CHAT_SEND, { message: '네 번째' });
+    await expect(rateLimited).resolves.toMatchObject({
+      message: expect.stringContaining('너무 빠르게'),
+    });
+  });
+
+  it('shows Flappy readiness until every player is ready', async () => {
+    const url = await start();
+    const host = await connect(url);
+    const guest = await connect(url);
+    sockets.push(host, guest);
+
+    const hostJoined = waitForEvent<RoomUpdatePacket>(
+      host,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    host.emit(SystemPacketType.JOIN_ROOM, {
+      roomId: '',
+      playerName: 'host',
+    });
+    const roomId = (await hostJoined).roomId;
+
+    const guestJoined = waitForEvent<RoomUpdatePacket>(
+      guest,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    guest.emit(SystemPacketType.JOIN_ROOM, {
+      roomId,
+      playerName: 'guest',
+    });
+    await guestJoined;
+
+    const configured = waitForEvent(
+      guest,
+      SystemPacketType.GAME_CONFIG_UPDATE,
+    );
+    host.emit(SystemPacketType.GAME_CONFIG_UPDATE_REQ, {
+      selectedGameType: GameType.FLAPPY_BIRD,
+      gameConfig: getDefaultConfig(GameType.FLAPPY_BIRD),
+    });
+    await configured;
+
+    const hostReadyScene = waitForEvent(host, SystemPacketType.READY_SCENE);
+    const guestReadyScene = waitForEvent(guest, SystemPacketType.READY_SCENE);
+    host.emit(SystemPacketType.GAME_START_REQ, {});
+    await Promise.all([hostReadyScene, guestReadyScene]);
+
+    const hostStatus = waitForEvent<{ readyCount: number; totalPlayers: number }>(
+      host,
+      FlappyBirdPacketType.FLAPPY_READY_STATUS,
+    );
+    const guestStatus = waitForEvent<{ readyCount: number; totalPlayers: number }>(
+      guest,
+      FlappyBirdPacketType.FLAPPY_READY_STATUS,
+    );
+    host.emit(FlappyBirdPacketType.FLAPPY_REQUEST_SYNC, {});
+    await expect(hostStatus).resolves.toEqual({ readyCount: 1, totalPlayers: 2 });
+    await expect(guestStatus).resolves.toEqual({ readyCount: 1, totalPlayers: 2 });
+
+    let countdownStarted = false;
+    host.once(FlappyBirdPacketType.FLAPPY_START_COUNTDOWN, () => {
+      countdownStarted = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(countdownStarted).toBe(false);
+
+    const countdown = waitForEvent<{ startsAt: number }>(
+      host,
+      FlappyBirdPacketType.FLAPPY_START_COUNTDOWN,
+    );
+    guest.emit(FlappyBirdPacketType.FLAPPY_REQUEST_SYNC, {});
+    expect((await countdown).startsAt - Date.now()).toBeGreaterThan(800);
+  });
+
+  it('lets only the host stop an active game and return everyone to the lobby', async () => {
+    const url = await start();
+    const host = await connect(url);
+    const guest = await connect(url);
+    sockets.push(host, guest);
+
+    const hostJoined = waitForEvent<RoomUpdatePacket>(
+      host,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    host.emit(SystemPacketType.JOIN_ROOM, { roomId: '', playerName: 'host' });
+    const roomId = (await hostJoined).roomId;
+
+    const guestJoined = waitForEvent<RoomUpdatePacket>(
+      guest,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    guest.emit(SystemPacketType.JOIN_ROOM, { roomId, playerName: 'guest' });
+    await guestJoined;
+
+    const configured = waitForEvent(
+      guest,
+      SystemPacketType.GAME_CONFIG_UPDATE,
+    );
+    host.emit(SystemPacketType.GAME_CONFIG_UPDATE_REQ, {
+      selectedGameType: GameType.APPLE_GAME,
+      gameConfig: getDefaultConfig(GameType.APPLE_GAME),
+    });
+    await configured;
+
+    const hostReady = waitForEvent(host, SystemPacketType.READY_SCENE);
+    const guestReady = waitForEvent(guest, SystemPacketType.READY_SCENE);
+    host.emit(SystemPacketType.GAME_START_REQ, {});
+    await Promise.all([hostReady, guestReady]);
+
+    let hostReturned = false;
+    host.once(SystemPacketType.RETURN_TO_THE_LOBBY, () => {
+      hostReturned = true;
+    });
+    guest.emit(SystemPacketType.RETURN_TO_THE_LOBBY_REQ, {});
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(hostReturned).toBe(false);
+
+    const hostLobby = waitForEvent(host, SystemPacketType.RETURN_TO_THE_LOBBY);
+    const guestLobby = waitForEvent(guest, SystemPacketType.RETURN_TO_THE_LOBBY);
+    host.emit(SystemPacketType.RETURN_TO_THE_LOBBY_REQ, {});
+    await Promise.all([hostLobby, guestLobby]);
+
+    const restarted = waitForEvent(host, SystemPacketType.READY_SCENE);
+    host.emit(SystemPacketType.GAME_START_REQ, {});
+    await restarted;
   });
 });

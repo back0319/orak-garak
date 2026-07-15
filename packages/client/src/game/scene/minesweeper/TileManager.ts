@@ -1,6 +1,9 @@
 ﻿import Phaser from 'phaser';
 import { GAME_WIDTH, GAME_HEIGHT } from '../../config/gameConfig';
-import { TileState } from '../../types/minesweeper.types';
+import {
+  TileState,
+  type ClientTileData,
+} from '../../types/minesweeper.types';
 
 // 타일 데이터 인터페이스 (로컬 렌더링용)
 export interface TileRenderData {
@@ -218,7 +221,10 @@ export default class TileManager {
   /**
    * 서버에서 받은 타일 데이터로 동기화 (시각적 렌더링 포함)
    */
-  public syncTilesFromServer(serverTiles: any[][]): void {
+  public syncTilesFromServer(
+    serverTiles: ClientTileData[][],
+    options: { suppressEffects?: boolean } = {},
+  ): void {
     if (!serverTiles || serverTiles.length === 0) {
       console.warn('[TileManager] 서버 타일 데이터가 비어있습니다');
       return;
@@ -241,6 +247,7 @@ export default class TileManager {
               serverTile.isMine,
               serverTile.revealedBy,
               serverTile.flaggedBy,
+              options.suppressEffects ?? false,
             );
             syncedCount++;
           }
@@ -331,6 +338,7 @@ export default class TileManager {
     isMine?: boolean,
     revealedBy?: string | null,
     flaggedBy?: string | null,
+    suppressEffects: boolean = false,
   ): boolean {
     if (row < 0 || row >= this.gridRows || col < 0 || col >= this.gridCols) {
       return false;
@@ -352,7 +360,7 @@ export default class TileManager {
 
     // 상태에 따른 시각적 업데이트
     switch (state) {
-      case TileState.REVEALED:
+      case TileState.REVEALED: {
         sprite.setTexture('TileOpened');
         // 깃발 스프라이트 숨기기
         const tileAlpha = 0.6;
@@ -360,6 +368,7 @@ export default class TileManager {
           this.flagSprites[row][col]!.setVisible(false);
         }
         if (tile.isMine) {
+          isMineTile = true;
           // 지뢰 이미지 표시 - 플레이어 색상 적용
           if (tile.revealedBy && this.playerColors.has(tile.revealedBy)) {
             const colorStr = this.playerColors.get(tile.revealedBy)!;
@@ -381,7 +390,9 @@ export default class TileManager {
             this.mineSprites[row][col]!.setVisible(true);
           }
           // 지뢰 폭발 사운드 이벤트 발생
-          this.scene.events.emit('minesweeperMineExplode');
+          if (!suppressEffects) {
+            this.scene.events.emit('minesweeperMineExplode');
+          }
         } else {
           // 빈 타일 또는 숫자 표시
           if (tile.revealedBy && this.playerColors.has(tile.revealedBy)) {
@@ -406,6 +417,7 @@ export default class TileManager {
           }
         }
         break;
+      }
 
       case TileState.FLAGGED:
         // 플레이어별 색상으로 깃발 표시

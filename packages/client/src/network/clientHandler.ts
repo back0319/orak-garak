@@ -93,6 +93,21 @@ export const handleServerPacket = (packet: ServerPacket) => {
       break;
     }
 
+    case SystemPacketType.LOBBY_CHAT_HISTORY: {
+      useGameStore.getState().setLobbyChatHistory(packet.messages);
+      break;
+    }
+
+    case SystemPacketType.LOBBY_CHAT_MESSAGE: {
+      useGameStore.getState().addLobbyChatMessage(packet.message);
+      break;
+    }
+
+    case SystemPacketType.LOBBY_CHAT_ERROR: {
+      useGameStore.getState().setLobbyChatError(packet.message);
+      break;
+    }
+
     case SystemPacketType.UPDATE_SCORE: {
       const store = useGameStore.getState();
       // scoreboard 배열의 인덱스가 플레이어 순서와 일치해야 함. 게임 중엔 안 바뀜?
@@ -234,11 +249,12 @@ export const handleServerPacket = (packet: ServerPacket) => {
 
     case SystemPacketType.RETURN_TO_THE_LOBBY: {
       const store = useGameStore.getState();
-      // 로비 복귀 시 FlappyBird 상태 초기화
+      store.resetGameState();
       store.resetFlappyState();
+      store.setGameStarted(false);
+      store.setGameReady(false);
       store.setScreen('lobby');
-      // 로비로 돌아갈 때 FlappyBird 상태 초기화 (다음 게임을 위한 클린 상태)
-      store.resetFlappyState();
+      bgmManager.pause();
       console.log('RETURN_TO_THE_LOBBY packet received: returning to lobby');
       break;
     }
@@ -247,6 +263,13 @@ export const handleServerPacket = (packet: ServerPacket) => {
     case FlappyBirdPacketType.FLAPPY_START_COUNTDOWN: {
       window.dispatchEvent(
         new CustomEvent('flappy:start_countdown', { detail: packet }),
+      );
+      break;
+    }
+
+    case FlappyBirdPacketType.FLAPPY_READY_STATUS: {
+      window.dispatchEvent(
+        new CustomEvent('flappy:ready_status', { detail: packet }),
       );
       break;
     }
@@ -468,11 +491,14 @@ function handleMSGameEnd(packet: MSGameEndPacket): void {
     };
   });
 
-  store.setGameResults(gameResults);
-  store.setGameStarted(false);
-  sfxManager.play('appleGameEnd');
-  bgmManager.pause();
-
   const event = new CustomEvent('ms:game_end', { detail: packet });
   window.dispatchEvent(event);
+
+  // 최종 보드를 먼저 한 프레임 렌더링한 뒤 반투명 결과창을 표시한다.
+  window.requestAnimationFrame(() => {
+    store.setGameResults(gameResults);
+    store.setGameStarted(false);
+    sfxManager.play('appleGameEnd');
+    bgmManager.pause();
+  });
 }

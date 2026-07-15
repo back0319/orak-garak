@@ -71,6 +71,7 @@ function AppContent() {
   // players: prefer server-provided players (from zustand store), fallback to currentPlayer
   const players = useGameStore((s) => s.players);
   const setPlayers = useGameStore((s) => s.setPlayers);
+  const myselfIndex = useGameStore((s) => s.myselfIndex);
 
   // 지뢰찾기 깃발 카운트 (플레이어별)
   const [flagCounts, setFlagCounts] = useState<Record<string, number>>({});
@@ -265,6 +266,13 @@ function AppContent() {
     // 나머지 처리는 서버의 RETURN_TO_THE_LOBBY 패킷을 받았을 때 처리됨
   }, []);
 
+  const handleAbortGame = useCallback(() => {
+    if (!window.confirm('진행 중인 게임을 중단하고 모두 로비로 돌아갈까요?')) {
+      return;
+    }
+    handleLobby();
+  }, [handleLobby]);
+
   // 닉네임 설정하고 시작 버튼 누를 때 동작
   const handleStart = async (inputNickname: string) => {
     // todo 색상도 서버가 알아서 줌.
@@ -436,6 +444,17 @@ function AppContent() {
 
           <SoundSetting gameReady={gameReady} />
         </div>
+
+        {myselfIndex === 0 && isGameStarted && (
+          <button
+            type="button"
+            className="nes-btn is-error game-abort-button"
+            onClick={handleAbortGame}
+            aria-label="게임을 중단하고 모두 로비로 돌아가기"
+          >
+            로비로 돌아가기
+          </button>
+        )}
       </div>
 
       {/* 하단 영역 - 화면 하단에 고정 */}

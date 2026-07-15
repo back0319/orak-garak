@@ -32,6 +32,7 @@ export interface BaseRankedResultProps {
   ratio?: number;
   title: string;
   renderPlayerSubline?: (player: PlayerData) => React.ReactNode;
+  transparent?: boolean;
 }
 
 const rankHeights: Record<number, number> = {
@@ -270,6 +271,7 @@ const BaseRankedResult: React.FC<BaseRankedResultProps> = ({
   ratio: propRatio,
   title,
   renderPlayerSubline,
+  transparent = false,
 }) => {
   const { playSFX } = useSFXContext();
   const ratio =
@@ -314,11 +316,20 @@ const BaseRankedResult: React.FC<BaseRankedResultProps> = ({
         }
       `}
       </style>
-      <div className="game-result-overlay" style={styles.overlay()}>
+      <div
+        className="game-result-overlay"
+        style={{
+          ...styles.overlay(),
+          ...(transparent ? { backgroundColor: 'transparent' } : {}),
+        }}
+      >
         <div
           className="nes-container is-rounded game-result-dialog"
           style={{
             ...styles.container(),
+            backgroundColor: transparent
+              ? 'rgba(255, 255, 255, 0.5)'
+              : '#fff',
             position: 'absolute',
             top: '50%',
             left: '50%',

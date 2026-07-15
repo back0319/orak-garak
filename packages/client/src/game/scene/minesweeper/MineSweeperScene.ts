@@ -860,6 +860,13 @@ export default class MineSweeperScene extends Phaser.Scene {
     if (this.timerSystem) {
       this.timerSystem.destroy();
     }
+    this.input.enabled = false;
+
+    if (data.tiles && this.tileManager) {
+      this.tileManager.syncTilesFromServer(data.tiles, {
+        suppressEffects: true,
+      });
+    }
 
     // 승리로 인한 종료인 경우 메시지 표시
     if (data.reason === 'win') {

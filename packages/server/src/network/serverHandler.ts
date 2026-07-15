@@ -5,6 +5,8 @@ import {
   RoomUpdatePacket,
   RoomUpdateType,
   GameConfigUpdatePacket,
+  type LobbyChatHistoryPacket,
+  type LobbyChatMessagePacket,
 } from '@main-game/common';
 import { GameSession } from '../games/gameSession';
 import { customAlphabet } from 'nanoid';
@@ -19,7 +21,10 @@ const sessions = new Map<string, GameSession>();
 // Player ID -> Room ID
 const playerRooms = new Map<string, string>(); // todo 얘가 지금 기본 socket.io room 으로 대체 가능성이 있음.
 const cleanupTimers = new Map<string, NodeJS.Timeout>();
+const lobbyChatRateLimits = new Map<string, number[]>();
 const EMPTY_ROOM_TTL_MS = Number(process.env.EMPTY_ROOM_TTL_MS) || 60 * 60 * 1000;
+const LOBBY_CHAT_WINDOW_MS = 5_000;
+const LOBBY_CHAT_MAX_PER_WINDOW = 3;
 
 function normalizePlayerName(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -32,6 +37,37 @@ function isValidRoomId(value: unknown): value is string {
   return typeof value === 'string' && (value === '' || /^[a-z0-9]{10}$/.test(value));
 }
 
+function normalizeLobbyChatMessage(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().replace(/\s+/g, ' ');
+  const length = Array.from(normalized).length;
+  return length >= 1 && length <= 100 ? normalized : null;
+}
+
+function consumeLobbyChatRateLimit(socketId: string): boolean {
+  const now = Date.now();
+  const recent = (lobbyChatRateLimits.get(socketId) ?? []).filter(
+    (timestamp) => timestamp > now - LOBBY_CHAT_WINDOW_MS,
+  );
+  if (recent.length >= LOBBY_CHAT_MAX_PER_WINDOW) {
+    lobbyChatRateLimits.set(socketId, recent);
+    return false;
+  }
+  recent.push(now);
+  lobbyChatRateLimits.set(socketId, recent);
+  return true;
+}
+
+function emitLobbyChatHistory(socket: Socket, session: GameSession): void {
+  const packet: LobbyChatHistoryPacket = {
+    type: SystemPacketType.LOBBY_CHAT_HISTORY,
+    messages: session.getLobbyChatHistory(),
+  };
+  socket.emit(SystemPacketType.LOBBY_CHAT_HISTORY, {
+    messages: packet.messages,
+  });
+}
+
 export function getSession(roomId: string): GameSession | undefined {
   return sessions.get(roomId);
 }
@@ -42,6 +78,7 @@ export function clearServerState(): void {
   for (const session of sessions.values()) session.stopGame();
   sessions.clear();
   playerRooms.clear();
+  lobbyChatRateLimits.clear();
 }
 
 export function handleConnection(socket: Socket) {
@@ -69,6 +106,7 @@ export function handleConnection(socket: Socket) {
 }
 
 export function handleDisconnect(socketId: string) {
+  lobbyChatRateLimits.delete(socketId);
   const roomId = playerRooms.get(socketId);
   if (roomId) {
     const session = sessions.get(roomId);
@@ -127,6 +165,39 @@ export function handleClientPacket(
 
     // System 패킷 처리
     switch (packet.type) {
+      case SystemPacketType.LOBBY_CHAT_SEND: {
+        if (session.status !== 'waiting') {
+          socket.emit(SystemPacketType.LOBBY_CHAT_ERROR, {
+            message: '채팅은 로비에서만 사용할 수 있습니다.',
+          });
+          break;
+        }
+
+        const message = normalizeLobbyChatMessage(packet.message);
+        if (!message) {
+          socket.emit(SystemPacketType.LOBBY_CHAT_ERROR, {
+            message: '메시지는 1자 이상 100자 이하로 입력해주세요.',
+          });
+          break;
+        }
+
+        if (!consumeLobbyChatRateLimit(socket.id)) {
+          socket.emit(SystemPacketType.LOBBY_CHAT_ERROR, {
+            message: '메시지를 너무 빠르게 보내고 있어요. 잠시 후 다시 시도해주세요.',
+          });
+          break;
+        }
+
+        const chatMessage = session.addLobbyChatMessage(socket.id, message);
+        if (!chatMessage) break;
+        const chatPacket: LobbyChatMessagePacket = {
+          type: SystemPacketType.LOBBY_CHAT_MESSAGE,
+          message: chatMessage,
+        };
+        session.broadcastPacket(chatPacket);
+        break;
+      }
+
       case SystemPacketType.GAME_START_REQ: {
         console.log(`[Server] GAME_START_REQ received from ${socket.id}`);
         console.log(
@@ -316,6 +387,7 @@ export async function joinPlayerToGame(
       roomId: roomId,
     };
     socket.emit(SystemPacketType.ROOM_UPDATE, roomUpdatePacket2Player);
+    emitLobbyChatHistory(socket, session);
     console.log(
       `[Server] Sent ROOM_UPDATE (${roomUpdatePacket2Player.updateType}) to ${socket.id}`,
     );
@@ -354,6 +426,7 @@ export async function joinPlayerToGame(
     roomId: roomId,
   };
   socket.emit(SystemPacketType.ROOM_UPDATE, roomUpdatePacket2Player);
+  emitLobbyChatHistory(socket, session);
   console.log(
     `[Server] Sent ROOM_UPDATE (${roomUpdatePacket2Player.updateType}) to ${socket.id}`,
   );

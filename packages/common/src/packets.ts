@@ -14,6 +14,10 @@ export enum SystemPacketType {
   JOIN_ROOM = 'JOIN_ROOM',
   ROOM_UPDATE = 'ROOM_UPDATE',
   SYSTEM_MESSAGE = 'SYSTEM_MESSAGE',
+  LOBBY_CHAT_SEND = 'LOBBY_CHAT_SEND',
+  LOBBY_CHAT_MESSAGE = 'LOBBY_CHAT_MESSAGE',
+  LOBBY_CHAT_HISTORY = 'LOBBY_CHAT_HISTORY',
+  LOBBY_CHAT_ERROR = 'LOBBY_CHAT_ERROR',
   GAME_CONFIG_UPDATE_REQ = 'GAME_CONFIG_UPDATE_REQ',
   GAME_CONFIG_UPDATE = 'GAME_CONFIG_UPDATE',
   GAME_START_REQ = 'GAME_START_REQ',
@@ -52,6 +56,35 @@ export interface RoomUpdatePacket {
 
 export interface SystemMessagePacket {
   type: SystemPacketType.SYSTEM_MESSAGE;
+  message: string;
+}
+
+export interface LobbyChatMessage {
+  id: string;
+  playerId: string;
+  playerName: string;
+  playerColor: string;
+  message: string;
+  sentAt: number;
+}
+
+export interface LobbyChatSendPacket {
+  type: SystemPacketType.LOBBY_CHAT_SEND;
+  message: string;
+}
+
+export interface LobbyChatMessagePacket {
+  type: SystemPacketType.LOBBY_CHAT_MESSAGE;
+  message: LobbyChatMessage;
+}
+
+export interface LobbyChatHistoryPacket {
+  type: SystemPacketType.LOBBY_CHAT_HISTORY;
+  messages: LobbyChatMessage[];
+}
+
+export interface LobbyChatErrorPacket {
+  type: SystemPacketType.LOBBY_CHAT_ERROR;
   message: string;
 }
 
@@ -111,6 +144,10 @@ export type SystemPacket =
   | JoinRoomPacket
   | RoomUpdatePacket
   | SystemMessagePacket
+  | LobbyChatSendPacket
+  | LobbyChatMessagePacket
+  | LobbyChatHistoryPacket
+  | LobbyChatErrorPacket
   | GameConfigUpdateReqPacket
   | GameConfigUpdatePacket
   | GameStartReqPacket
@@ -180,6 +217,7 @@ export enum FlappyBirdPacketType {
   FLAPPY_WORLD_STATE = 'FLAPPY_WORLD_STATE',
   FLAPPY_SCORE_UPDATE = 'FLAPPY_SCORE_UPDATE',
   FLAPPY_GAME_OVER = 'FLAPPY_GAME_OVER',
+  FLAPPY_READY_STATUS = 'FLAPPY_READY_STATUS',
   FLAPPY_START_COUNTDOWN = 'FLAPPY_START_COUNTDOWN',
   /** 게임 상태 동기화 응답 (씬 로딩 완료 후 현재 상태 전송) */
   FLAPPY_SYNC_STATE = 'FLAPPY_SYNC_STATE',
@@ -217,6 +255,12 @@ export interface FlappyStartCountdownPacket {
   startsAt: number;
 }
 
+export interface FlappyReadyStatusPacket {
+  type: FlappyBirdPacketType.FLAPPY_READY_STATUS;
+  readyCount: number;
+  totalPlayers: number;
+}
+
 /** 클라이언트 → 서버: 씬 로딩 완료 후 동기화 요청 */
 export interface FlappyRequestSyncPacket {
   type: FlappyBirdPacketType.FLAPPY_REQUEST_SYNC;
@@ -243,6 +287,7 @@ export type FlappyBirdPacket =
   | FlappyWorldStatePacket
   | FlappyScoreUpdatePacket
   | FlappyGameOverPacket
+  | FlappyReadyStatusPacket
   | FlappyStartCountdownPacket
   | FlappySyncStatePacket;
 

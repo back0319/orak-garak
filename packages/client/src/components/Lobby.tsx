@@ -38,6 +38,7 @@ export interface LobbyProps {
 import { useSFXContext } from '../contexts/SFXContext';
 import { GAME_DESCRIPTIONS } from '../constants/gameDescriptions';
 import faviconIcon from '../assets/icons/favicon.png';
+import LobbyChat from './LobbyChat';
 
 const {
   MAX_PLAYERS,
@@ -507,6 +508,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
               ))}
             </div>
           </div>
+          <LobbyChat />
         </div>
 
         {/* 오른쪽: 게임 리스트 */}

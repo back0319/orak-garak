@@ -237,7 +237,34 @@ export default class FlappyBirdsScene extends Phaser.Scene {
   }
 
   private setupStartCountdownEventListener(): void {
+    const handleReadyStatus = (event: Event) => {
+      if (!this.sys?.isActive()) return;
+      const { readyCount, totalPlayers } = (
+        event as CustomEvent<{ readyCount: number; totalPlayers: number }>
+      ).detail;
+      this.gameStarted = false;
+      this.countdownText?.destroy();
+      this.countdownText = this.add
+        .text(
+          this.scale.width / 2,
+          this.scale.height / 2,
+          `다른 플레이어를 기다리는 중…\n${readyCount}/${totalPlayers} 준비 완료`,
+          {
+            fontFamily: 'NeoDunggeunmo',
+            fontSize: `${Math.max(20, 32 * this.getRatio())}px`,
+            align: 'center',
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 6,
+          },
+        )
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(2000);
+    };
+
     const handleCountdown = (event: Event) => {
+      if (!this.sys?.isActive()) return;
       const { startsAt } = (event as CustomEvent<{ startsAt: number }>).detail;
       this.gameStarted = false;
       this.countdownText?.destroy();
@@ -267,8 +294,10 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       }, Math.max(0, startsAt - Date.now()));
     };
 
+    window.addEventListener('flappy:ready_status', handleReadyStatus);
     window.addEventListener('flappy:start_countdown', handleCountdown);
     this.events.once('shutdown', () => {
+      window.removeEventListener('flappy:ready_status', handleReadyStatus);
       window.removeEventListener('flappy:start_countdown', handleCountdown);
       if (this.countdownTimer !== undefined) {
         window.clearTimeout(this.countdownTimer);

@@ -12,6 +12,7 @@ import {
   GameType,
   type GameConfig,
   type AppleGameRenderConfig,
+  type LobbyChatMessage,
   sanitizeForApple,
   FlappyBirdPacketType,
 } from '@main-game/common';
@@ -40,6 +41,8 @@ export class GameSession {
   private flappyReadyTimeout: NodeJS.Timeout | null = null;
   private flappyCountdownTimeout: NodeJS.Timeout | null = null;
   private waitingForFlappyReady = false;
+  private lobbyChatMessages: LobbyChatMessage[] = [];
+  private lobbyChatSequence = 0;
 
   constructor(
     public io: Server,
@@ -147,6 +150,35 @@ export class GameSession {
       color: p.color,
       reportCard: p.reportCard,
     }));
+  }
+
+  public getLobbyChatHistory(): LobbyChatMessage[] {
+    return this.lobbyChatMessages.map((message) => ({ ...message }));
+  }
+
+  public addLobbyChatMessage(
+    playerId: string,
+    message: string,
+  ): LobbyChatMessage | null {
+    const player = this.players.get(playerId);
+    if (!player || this.status !== 'waiting') return null;
+
+    const sentAt = Date.now();
+    const chatMessage: LobbyChatMessage = {
+      id: `${sentAt.toString(36)}-${++this.lobbyChatSequence}`,
+      playerId,
+      playerName: player.playerName,
+      playerColor: player.color,
+      message,
+      sentAt,
+    };
+
+    this.lobbyChatMessages.push(chatMessage);
+    if (this.lobbyChatMessages.length > 50) {
+      this.lobbyChatMessages.splice(0, this.lobbyChatMessages.length - 50);
+    }
+
+    return chatMessage;
   }
 
   // ========== GAME LIFECYCLE ==========
@@ -307,29 +339,26 @@ export class GameSession {
   }
 
   public returnToLobby(id: string) {
-    // 1. 게임 결과창 화면인지 검사
-    if (this.status !== 'ended') {
-      console.log('[GameSession] Cannot return to lobby: game is not ended');
-      // todo 클라에게 정보 보내주어야 함?
+    // 게임 중단과 결과 화면 복귀 모두 지원하되 방장만 실행할 수 있다.
+    if (this.status !== 'playing' && this.status !== 'ended') {
+      console.log('[GameSession] Cannot return to lobby: game is not active');
       return;
     }
 
-    // 2. 방장인지 검사
     if (!this.isHost(id)) {
       console.log('[GameSession] Cannot return to lobby: not a host');
       return;
     }
 
-    // 3. 게임 인스턴스 정리
+    this.clearFlappyStartTimers();
     if (this.games) {
+      this.games.stop();
       this.games.destroy();
       this.games = null;
     }
 
-    // 4. 상태를 waiting으로 초기화
     this.status = 'waiting';
 
-    // 5. 방 인원 모두에게 ReturnToTheLobby 패킷 전송
     const returnToLobbyPacket: ReturnToTheLobbyPacket = {
       type: SystemPacketType.RETURN_TO_THE_LOBBY,
     };
@@ -374,6 +403,12 @@ export class GameSession {
             this.flappyCountdownTimeout = null;
             if (this.status === 'playing') this.games?.start();
           }, Math.max(0, startsAt - Date.now()));
+        } else {
+          this.broadcastPacket({
+            type: FlappyBirdPacketType.FLAPPY_READY_STATUS,
+            readyCount: this.flappyReadyPlayers.size,
+            totalPlayers: this.players.size,
+          });
         }
       }
       return;

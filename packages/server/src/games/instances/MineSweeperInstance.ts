@@ -649,6 +649,7 @@ export class MineSweeperInstance implements GameInstance {
       type: MineSweeperPacketType.MS_GAME_END,
       reason,
       results,
+      tiles: this.getFinalClientTiles(),
       timestamp: Date.now(),
     };
     this.broadcast(MineSweeperPacketType.MS_GAME_END, gameEndPacket);
@@ -765,6 +766,20 @@ export class MineSweeperInstance implements GameInstance {
 
   private getClientTiles(): ClientTileData[][] {
     return this.tiles.map((row) => row.map((tile) => this.toClientTile(tile)));
+  }
+
+  private getFinalClientTiles(): ClientTileData[][] {
+    return this.tiles.map((row) =>
+      row.map((tile) => ({
+        row: tile.row,
+        col: tile.col,
+        state: TileState.REVEALED,
+        isMine: tile.isMine,
+        adjacentMines: tile.adjacentMines,
+        revealedBy: tile.revealedBy,
+        flaggedBy: tile.flaggedBy,
+      })),
+    );
   }
 
   private toClientTile(tile: ServerTileData): ClientTileData {

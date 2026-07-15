@@ -39,6 +39,7 @@ const MineSweeperResult: React.FC<MineSweeperResultProps> = (props) => {
       {...baseProps}
       title="MINESWEEPER TOGETHER"
       renderPlayerSubline={getPlayerSubline}
+      transparent
     />
   );
 };

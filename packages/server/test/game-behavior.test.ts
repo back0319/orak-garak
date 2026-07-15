@@ -5,7 +5,9 @@ import {
   DEFAULT_APPLE_GAME_RENDER_CONFIG,
   FlappyBirdPacketType,
   GameType,
+  MineSweeperPacketType,
   SystemPacketType,
+  TileState,
   getDefaultConfig,
   type FlappyBirdGamePreset,
   type PlayerState,
@@ -14,6 +16,7 @@ import {
 import type { GameSession } from '../src/games/gameSession';
 import { AppleGameInstance } from '../src/games/instances/AppleGameInstance';
 import { FlappyBirdInstance } from '../src/games/instances/FlappyBirdInstance';
+import { MineSweeperInstance } from '../src/games/instances/MineSweeperInstance';
 
 function player(id: string): PlayerState {
   return {
@@ -139,5 +142,43 @@ describe('restored original game behavior', () => {
     expect(
       packets.some((packet) => packet.type === AppleGamePacketType.SET_FIELD),
     ).toBe(true);
+  });
+
+  it('reveals the complete Minesweeper board in the game-end packet', () => {
+    const emitted: Array<{ event: string; payload: unknown }> = [];
+    const session = {
+      selectedGameType: GameType.MINESWEEPER,
+      status: 'playing',
+      players: new Map([['one', player('one')]]),
+      roomId: 'testroom00',
+      io: {
+        to: () => ({
+          emit: (event: string, payload: unknown) => {
+            emitted.push({ event, payload });
+          },
+        }),
+      },
+    } as unknown as GameSession;
+
+    const game = new MineSweeperInstance(session);
+    game.initialize(getDefaultConfig(GameType.MINESWEEPER));
+    (
+      game as unknown as { triggerGameEnd(reason: 'timeout'): void }
+    ).triggerGameEnd('timeout');
+
+    const end = emitted.find(
+      ({ event }) => event === MineSweeperPacketType.MS_GAME_END,
+    )?.payload as
+      | { tiles: Array<Array<{ state: TileState; isMine: boolean }>> }
+      | undefined;
+
+    expect(end).toBeDefined();
+    expect(end?.tiles.flat()).not.toHaveLength(0);
+    expect(end?.tiles.flat().every((tile) => tile.state === TileState.REVEALED)).toBe(
+      true,
+    );
+    expect(end?.tiles.flat().some((tile) => tile.isMine)).toBe(true);
+
+    game.destroy();
   });
 });

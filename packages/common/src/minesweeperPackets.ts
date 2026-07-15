@@ -235,6 +235,8 @@ export interface MSGameEndPacket {
     correctFlags: number;
     totalFlags: number;
   }[];
+  /** 결과 화면 뒤에서 확인할 수 있도록 모든 지뢰를 공개한 최종 보드 */
+  tiles: ClientTileData[][];
   /** 타임스탬프 */
   timestamp: number;
 }
