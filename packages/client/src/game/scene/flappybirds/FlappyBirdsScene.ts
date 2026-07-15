@@ -117,6 +117,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
 
   create() {
     console.log('[FlappyBirdsScene] create 메서드 시작');
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.shutdown, this);
 
     // 소켓 연결 먼저 (기존 리스너 정리를 위해)
     this.socket = getSocket();
@@ -499,6 +500,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
         gameOverData: state.flappyGameOverData,
       }),
       (current, previous) => {
+        if (!this.sys?.isActive()) return;
         // pendingGameOverFromSync 상태에서 birds 데이터가 도착하면 게임 오버 처리
         if (this.pendingGameOverFromSync && current.birds.length > 0) {
           console.log(
@@ -1243,6 +1245,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
    * update()가 호출되지 않아도 최종 위치가 반영되도록 함
    */
   private applyGameOverPositions(): void {
+    if (!this.sys?.isActive() || !this.cameras?.main) return;
     const ratio = this.getRatio();
     const store = useGameStore.getState();
 
