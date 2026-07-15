@@ -23,6 +23,8 @@ import { FlappyBirdInstance } from './instances/FlappyBirdInstance';
 import { MineSweeperInstance } from './instances/MineSweeperInstance';
 
 export class GameSession {
+  private static readonly FLAPPY_COUNTDOWN_MS = 1_000;
+  private static readonly FLAPPY_START_ACK_TIMEOUT_MS = 1_000;
   // selected game in this session (lobby choice)
   public selectedGameType: GameType = GameType.APPLE_GAME;
   // 게임 인스턴스 (현재 활성화된 게임)
@@ -41,6 +43,8 @@ export class GameSession {
   private flappyReadyTimeout: NodeJS.Timeout | null = null;
   private flappyCountdownTimeout: NodeJS.Timeout | null = null;
   private waitingForFlappyReady = false;
+  private waitingForFlappyStartAcks = false;
+  private flappyStartAcknowledgedPlayers = new Set<string>();
   private lobbyChatMessages: LobbyChatMessage[] = [];
   private lobbyChatSequence = 0;
 
@@ -394,15 +398,32 @@ export class GameSession {
           this.waitingForFlappyReady = false;
           if (this.flappyReadyTimeout) clearTimeout(this.flappyReadyTimeout);
           this.flappyReadyTimeout = null;
-          const startsAt = Date.now() + 1000;
+          const countdownMs = GameSession.FLAPPY_COUNTDOWN_MS;
+          const startsAt = Date.now() + countdownMs;
           this.broadcastPacket({
             type: FlappyBirdPacketType.FLAPPY_START_COUNTDOWN,
             startsAt,
+            countdownMs,
           });
           this.flappyCountdownTimeout = setTimeout(() => {
-            this.flappyCountdownTimeout = null;
-            if (this.status === 'playing') this.games?.start();
-          }, Math.max(0, startsAt - Date.now()));
+            if (this.status !== 'playing') {
+              this.flappyCountdownTimeout = null;
+              return;
+            }
+
+            const ackTimeoutMs = GameSession.FLAPPY_START_ACK_TIMEOUT_MS;
+            this.waitingForFlappyStartAcks = true;
+            this.flappyStartAcknowledgedPlayers.clear();
+            this.broadcastPacket({
+              type: FlappyBirdPacketType.FLAPPY_GAME_START,
+              ackTimeoutMs,
+            });
+
+            // 캐시된 구버전 클라이언트가 ACK하지 않는 경우에도 방이 멈추지 않게 한다.
+            this.flappyCountdownTimeout = setTimeout(() => {
+              this.startFlappyPhysics();
+            }, ackTimeoutMs);
+          }, countdownMs);
         } else {
           this.broadcastPacket({
             type: FlappyBirdPacketType.FLAPPY_READY_STATUS,
@@ -411,6 +432,19 @@ export class GameSession {
           });
         }
       }
+      return;
+    }
+
+    if (
+      this.selectedGameType === GameType.FLAPPY_BIRD &&
+      packet.type === FlappyBirdPacketType.FLAPPY_GAME_START_ACK
+    ) {
+      if (!this.waitingForFlappyStartAcks) return;
+      this.flappyStartAcknowledgedPlayers.add(socket.id);
+      const everyoneAcknowledged = Array.from(this.players.keys()).every((id) =>
+        this.flappyStartAcknowledgedPlayers.has(id),
+      );
+      if (everyoneAcknowledged) this.startFlappyPhysics();
       return;
     }
 
@@ -426,7 +460,19 @@ export class GameSession {
     this.flappyReadyTimeout = null;
     this.flappyCountdownTimeout = null;
     this.waitingForFlappyReady = false;
+    this.waitingForFlappyStartAcks = false;
     this.flappyReadyPlayers.clear();
+    this.flappyStartAcknowledgedPlayers.clear();
+  }
+
+  private startFlappyPhysics(): void {
+    if (!this.waitingForFlappyStartAcks) return;
+    this.waitingForFlappyStartAcks = false;
+    if (this.flappyCountdownTimeout) {
+      clearTimeout(this.flappyCountdownTimeout);
+      this.flappyCountdownTimeout = null;
+    }
+    if (this.status === 'playing') this.games?.start();
   }
 
   public broadcastPacket(packet: ServerPacket) {

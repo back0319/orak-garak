@@ -267,6 +267,13 @@ export const handleServerPacket = (packet: ServerPacket) => {
       break;
     }
 
+    case FlappyBirdPacketType.FLAPPY_GAME_START: {
+      window.dispatchEvent(
+        new CustomEvent('flappy:game_start', { detail: packet }),
+      );
+      break;
+    }
+
     case FlappyBirdPacketType.FLAPPY_READY_STATUS: {
       window.dispatchEvent(
         new CustomEvent('flappy:ready_status', { detail: packet }),

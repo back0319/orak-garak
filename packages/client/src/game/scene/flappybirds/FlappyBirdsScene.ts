@@ -237,6 +237,23 @@ export default class FlappyBirdsScene extends Phaser.Scene {
   }
 
   private setupStartCountdownEventListener(): void {
+    const activateGameStart = () => {
+      if (!this.sys?.isActive() || this.gameStarted) return;
+      if (this.countdownTimer !== undefined) {
+        window.clearTimeout(this.countdownTimer);
+        this.countdownTimer = undefined;
+      }
+      this.gameStarted = true;
+      this.countdownText?.setText('시작!');
+      socketManager.send({
+        type: FlappyBirdPacketType.FLAPPY_GAME_START_ACK,
+      });
+      this.time.delayedCall(300, () => {
+        this.countdownText?.destroy();
+        this.countdownText = undefined;
+      });
+    };
+
     const handleReadyStatus = (event: Event) => {
       if (!this.sys?.isActive()) return;
       const { readyCount, totalPlayers } = (
@@ -265,7 +282,9 @@ export default class FlappyBirdsScene extends Phaser.Scene {
 
     const handleCountdown = (event: Event) => {
       if (!this.sys?.isActive()) return;
-      const { startsAt } = (event as CustomEvent<{ startsAt: number }>).detail;
+      const { startsAt, countdownMs } = (
+        event as CustomEvent<{ startsAt: number; countdownMs?: number }>
+      ).detail;
       this.gameStarted = false;
       this.countdownText?.destroy();
       this.countdownText = this.add
@@ -284,21 +303,21 @@ export default class FlappyBirdsScene extends Phaser.Scene {
         window.clearTimeout(this.countdownTimer);
       }
       this.countdownTimer = window.setTimeout(() => {
-        this.gameStarted = true;
-        this.countdownText?.setText('시작!');
-        this.time.delayedCall(300, () => {
-          this.countdownText?.destroy();
-          this.countdownText = undefined;
-        });
-        this.countdownTimer = undefined;
-      }, Math.max(0, startsAt - Date.now()));
+        activateGameStart();
+      }, countdownMs ?? Math.max(0, startsAt - Date.now()));
+    };
+
+    const handleGameStart = () => {
+      activateGameStart();
     };
 
     window.addEventListener('flappy:ready_status', handleReadyStatus);
     window.addEventListener('flappy:start_countdown', handleCountdown);
+    window.addEventListener('flappy:game_start', handleGameStart);
     this.events.once('shutdown', () => {
       window.removeEventListener('flappy:ready_status', handleReadyStatus);
       window.removeEventListener('flappy:start_countdown', handleCountdown);
+      window.removeEventListener('flappy:game_start', handleGameStart);
       if (this.countdownTimer !== undefined) {
         window.clearTimeout(this.countdownTimer);
         this.countdownTimer = undefined;

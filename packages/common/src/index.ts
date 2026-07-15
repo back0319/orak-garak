@@ -91,6 +91,8 @@ export {
   type FlappyGameOverPacket,
   type FlappyReadyStatusPacket,
   type FlappyStartCountdownPacket,
+  type FlappyGameStartPacket,
+  type FlappyGameStartAckPacket,
   type FlappyRequestSyncPacket,
   type FlappySyncStatePacket,
   type FlappyBirdPacket,

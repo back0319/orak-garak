@@ -161,13 +161,26 @@ describe('Socket.IO game server', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(worldPackets).toBe(0);
 
-    const countdown = waitForEvent<{ startsAt: number }>(
+    const countdown = waitForEvent<{ startsAt: number; countdownMs: number }>(
       socket,
       FlappyBirdPacketType.FLAPPY_START_COUNTDOWN,
     );
+    const gameStart = waitForEvent<{ ackTimeoutMs: number }>(
+      socket,
+      FlappyBirdPacketType.FLAPPY_GAME_START,
+    );
     socket.emit(FlappyBirdPacketType.FLAPPY_REQUEST_SYNC, {});
-    const { startsAt } = await countdown;
+    const { startsAt, countdownMs } = await countdown;
     expect(startsAt - Date.now()).toBeGreaterThan(800);
+    expect(countdownMs).toBe(1000);
+
+    const { ackTimeoutMs } = await gameStart;
+    expect(ackTimeoutMs).toBe(1000);
+    expect(worldPackets).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(worldPackets).toBe(0);
+
+    socket.emit(FlappyBirdPacketType.FLAPPY_GAME_START_ACK, {});
 
     await waitForEvent(
       socket,
@@ -292,6 +305,10 @@ describe('Socket.IO game server', () => {
 
     const hostReadyScene = waitForEvent(host, SystemPacketType.READY_SCENE);
     const guestReadyScene = waitForEvent(guest, SystemPacketType.READY_SCENE);
+    let worldPackets = 0;
+    host.on(FlappyBirdPacketType.FLAPPY_WORLD_STATE, () => {
+      worldPackets++;
+    });
     host.emit(SystemPacketType.GAME_START_REQ, {});
     await Promise.all([hostReadyScene, guestReadyScene]);
 
@@ -314,12 +331,31 @@ describe('Socket.IO game server', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(countdownStarted).toBe(false);
 
-    const countdown = waitForEvent<{ startsAt: number }>(
+    const countdown = waitForEvent<{ startsAt: number; countdownMs: number }>(
       host,
       FlappyBirdPacketType.FLAPPY_START_COUNTDOWN,
     );
+    const gameStart = waitForEvent<{ ackTimeoutMs: number }>(
+      host,
+      FlappyBirdPacketType.FLAPPY_GAME_START,
+    );
     guest.emit(FlappyBirdPacketType.FLAPPY_REQUEST_SYNC, {});
-    expect((await countdown).startsAt - Date.now()).toBeGreaterThan(800);
+    const countdownPacket = await countdown;
+    expect(countdownPacket.startsAt - Date.now()).toBeGreaterThan(800);
+    expect(countdownPacket.countdownMs).toBe(1000);
+
+    await gameStart;
+    host.emit(FlappyBirdPacketType.FLAPPY_GAME_START_ACK, {});
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(worldPackets).toBe(0);
+
+    const firstWorldState = waitForEvent(
+      host,
+      FlappyBirdPacketType.FLAPPY_WORLD_STATE,
+    );
+    guest.emit(FlappyBirdPacketType.FLAPPY_GAME_START_ACK, {});
+    await firstWorldState;
+    expect(worldPackets).toBeGreaterThan(0);
   });
 
   it('lets only the host stop an active game and return everyone to the lobby', async () => {

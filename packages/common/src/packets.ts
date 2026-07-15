@@ -212,6 +212,8 @@ export enum FlappyBirdPacketType {
   FLAPPY_JUMP = 'FLAPPY_JUMP',
   /** 게임 상태 동기화 요청 (씬 로딩 완료 후) */
   FLAPPY_REQUEST_SYNC = 'FLAPPY_REQUEST_SYNC',
+  /** 시작 UI와 입력 활성화를 완료한 클라이언트의 확인 */
+  FLAPPY_GAME_START_ACK = 'FLAPPY_GAME_START_ACK',
 
   // 서버 → 클라이언트
   FLAPPY_WORLD_STATE = 'FLAPPY_WORLD_STATE',
@@ -219,6 +221,7 @@ export enum FlappyBirdPacketType {
   FLAPPY_GAME_OVER = 'FLAPPY_GAME_OVER',
   FLAPPY_READY_STATUS = 'FLAPPY_READY_STATUS',
   FLAPPY_START_COUNTDOWN = 'FLAPPY_START_COUNTDOWN',
+  FLAPPY_GAME_START = 'FLAPPY_GAME_START',
   /** 게임 상태 동기화 응답 (씬 로딩 완료 후 현재 상태 전송) */
   FLAPPY_SYNC_STATE = 'FLAPPY_SYNC_STATE',
 }
@@ -253,6 +256,18 @@ export interface FlappyGameOverPacket {
 export interface FlappyStartCountdownPacket {
   type: FlappyBirdPacketType.FLAPPY_START_COUNTDOWN;
   startsAt: number;
+  /** 클라이언트 기기 시계와 무관하게 표시할 상대 카운트다운 시간 */
+  countdownMs: number;
+}
+
+export interface FlappyGameStartPacket {
+  type: FlappyBirdPacketType.FLAPPY_GAME_START;
+  /** 구버전 클라이언트가 ACK하지 않을 때 사용하는 안전 타임아웃 */
+  ackTimeoutMs: number;
+}
+
+export interface FlappyGameStartAckPacket {
+  type: FlappyBirdPacketType.FLAPPY_GAME_START_ACK;
 }
 
 export interface FlappyReadyStatusPacket {
@@ -284,11 +299,13 @@ export interface FlappySyncStatePacket {
 export type FlappyBirdPacket =
   | FlappyJumpPacket
   | FlappyRequestSyncPacket
+  | FlappyGameStartAckPacket
   | FlappyWorldStatePacket
   | FlappyScoreUpdatePacket
   | FlappyGameOverPacket
   | FlappyReadyStatusPacket
   | FlappyStartCountdownPacket
+  | FlappyGameStartPacket
   | FlappySyncStatePacket;
 
 // ========== MINESWEEPER PACKETS ==========
