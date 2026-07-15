@@ -1234,6 +1234,9 @@ export default class FlappyBirdsScene extends Phaser.Scene {
    * update()가 호출되지 않아도 최종 위치가 반영되도록 함
    */
   private applyGameOverPositions(): void {
+    const camera = this.cameras?.main;
+    if (!camera || !this.sys?.game) return;
+
     const ratio = this.getRatio();
     const store = useGameStore.getState();
 
@@ -1241,10 +1244,10 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     const cameraX =
       store.flappyCameraX ?? store.flappyGameOverData?.cameraX ?? 0;
     if (cameraX > 0) {
-      this.cameras.main.scrollX = cameraX * ratio;
+      camera.scrollX = cameraX * ratio;
       // 지면 스크롤도 동기화
       if (this.groundTile) {
-        this.groundTile.tilePositionX = this.cameras.main.scrollX;
+        this.groundTile.tilePositionX = camera.scrollX;
       }
       console.log('[FlappyBirdsScene] 게임 오버 카메라 위치 적용:', cameraX);
     }
@@ -1254,7 +1257,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       const sprite = this.birdSprites[i];
       const target = this.targetPositions[i];
 
-      if (target) {
+      if (target && sprite.active) {
         sprite.x = target.x * ratio;
         sprite.y = target.y * ratio;
 
