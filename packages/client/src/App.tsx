@@ -351,6 +351,7 @@ function AppContent() {
     viewport.width / 1440,
     viewport.height / 900,
   );
+  const usesOverlayHud = currentGameType === GameType.FLAPPY_BIRD;
 
   // 랜딩 페이지 표시
   if (screen === 'landing') {
@@ -363,7 +364,13 @@ function AppContent() {
   }
 
   return (
-    <div className="App game-screen">
+    <div
+      className={`App game-screen ${
+        usesOverlayHud
+          ? 'game-screen--overlay-hud'
+          : 'game-screen--reserved-hud'
+      }`}
+    >
       <header className="App-header" />
 
       {/* <SocketCounter /> */}
