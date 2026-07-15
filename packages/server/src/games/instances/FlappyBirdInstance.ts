@@ -10,7 +10,6 @@ import {
   createFlappyPhysicsRuntime,
   destroyFlappyPhysicsRuntime,
   snapshotFlappyBirds,
-  applyDeterministicFlappyJump,
   stepFlappyBirdPhysics,
   calculateFlappyRopeConnections,
   FlappyBirdPacketType,
@@ -305,7 +304,7 @@ export class FlappyBirdInstance implements GameInstance {
       if (!this.isRunning) return;
     }
 
-    // 물리는 60Hz로 처리하되 네트워크는 최신 상태만 최대 20Hz로 보낸다.
+    // 원본과 동일하게 물리와 최신 좌표를 최대 60Hz로 전송한다.
     const networkStep = FLAPPY_PHYSICS_FPS / FLAPPY_NETWORK_FPS;
     if (steps > 0 && this.physicsTick - this.lastBroadcastTick >= networkStep) {
       this.lastBroadcastTick = this.physicsTick;
@@ -536,18 +535,21 @@ export class FlappyBirdInstance implements GameInstance {
     const sequence = inputSeq as number;
     if (sequence <= (this.lastProcessedInputSeqs[playerIndex] ?? 0)) return;
 
+    const bird = this.birds[playerIndex];
+    if (!bird) return;
+
     const applyTick = this.physicsTick + 1;
-    const applied = applyDeterministicFlappyJump(
-      this.birds,
-      playerIndex,
-      sequence,
-      this.physicsSeed,
-      {
-        flapBoostBase: this.flapBoostBase,
-        flapBoostRandom: this.flapBoostRandom,
-      },
-    );
-    if (!applied) return;
+    const extraBoost =
+      this.flapBoostBase + Math.random() * this.flapBoostRandom;
+    const verticalJitter =
+      (Math.random() - 0.5) *
+      Math.abs(FLAPPY_PHYSICS.FLAP_VELOCITY) *
+      FLAPPY_PHYSICS.FLAP_VERTICAL_JITTER_RATIO;
+    Matter.Body.setVelocity(bird, {
+      x: bird.velocity.x + extraBoost,
+      y: FLAPPY_PHYSICS.FLAP_VELOCITY + verticalJitter,
+    });
+    Matter.Body.setAngularVelocity(bird, 0);
 
     this.lastFlapTicks[playerIndex] = this.physicsTick;
     this.lastProcessedInputSeqs[playerIndex] = sequence;

@@ -9,7 +9,11 @@ import { GameType } from '../../../../../common/src/config';
 import type { PlayerData } from '../../types/common';
 import { hexStringToNumber, adjustBrightness } from '../../utils/colorUtils';
 import { GAME_WIDTH, GAME_HEIGHT } from '../../config/gameConfig';
-import { getMyPlayerData, useGameStore } from '../../../store/gameStore';
+import {
+  getMyPlayerData,
+  useGameStore,
+  type GameTimerState,
+} from '../../../store/gameStore';
 import { DragAreaSender } from '../../utils/DragAreaSender';
 import { OtherPlayerDragRenderer } from '../../utils/OtherPlayerDragRenderer';
 
@@ -237,13 +241,11 @@ export default class AppleGameManager {
   }
 
   /** 지정된 시간으로 타이머 시작 (멀티플레이용) */
-  public startTimerWithDuration(seconds: number): void {
+  public startTimerWithDuration(timer: GameTimerState): void {
+    this.timerSystem?.destroy();
     this.timerSystem = new TimerSystem(this.scene, this.timerPrefab, this);
-
-    // 서버 시작 시간 가져오기
-    const serverStartTime = useGameStore.getState().serverStartTime;
-    this.timerSystem.start(seconds, serverStartTime || undefined);
-    console.log(`⏱️ 타이머 시작: ${seconds}초`);
+    this.timerSystem.start(timer.limitTime, timer);
+    console.log(`⏱️ 타이머 시작: ${timer.limitTime}초`);
   }
 
   /** DROP_CELL_INDEX 이벤트 구독 */
@@ -462,6 +464,8 @@ export default class AppleGameManager {
   }
 
   public gameEnd(): void {
+    this.timerSystem?.finish();
+
     // 드래그 선택 비활성화
     this.detachDrag?.();
 

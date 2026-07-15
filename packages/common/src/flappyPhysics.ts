@@ -4,8 +4,8 @@ import type { ResolvedFlappyBirdConfig } from './config';
 import { FLAPPY_PHYSICS } from './config';
 
 export const FLAPPY_PHYSICS_FPS = 60;
-export const FLAPPY_NETWORK_FPS = 20;
-export const FLAPPY_PHYSICS_SUBSTEPS = 2;
+export const FLAPPY_NETWORK_FPS = 60;
+export const FLAPPY_PHYSICS_SUBSTEPS = 5;
 export const FLAPPY_PHYSICS_FRAME_MS = 1000 / FLAPPY_PHYSICS_FPS;
 
 export interface FlappyPhysicsRuntime {

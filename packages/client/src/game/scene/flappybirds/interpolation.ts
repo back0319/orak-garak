@@ -1,6 +1,7 @@
 const SERVER_PHYSICS_FRAME_MS = 1000 / 60;
 const MAX_EXTRAPOLATION_MS = 100;
-const POSITION_RESPONSE_RATE = 24;
+// 원본의 프레임당 0.3 보간을 60Hz 기준으로 시간 독립적으로 변환한다.
+const POSITION_RESPONSE_RATE = -Math.log(0.7) * 60;
 
 export function getPredictionFrames(snapshotAgeMs: number): number {
   const boundedAge = Math.min(MAX_EXTRAPOLATION_MS, Math.max(0, snapshotAgeMs));

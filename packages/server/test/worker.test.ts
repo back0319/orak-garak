@@ -1,12 +1,17 @@
 import { env, exports } from 'cloudflare:workers';
 import { evictDurableObject, runDurableObjectAlarm } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import Matter from 'matter-js';
 import {
   GameType,
   FlappyBirdPacketType,
+  FLAPPY_NETWORK_FPS,
+  FLAPPY_PHYSICS,
+  FLAPPY_PHYSICS_FRAME_MS,
+  FLAPPY_PHYSICS_SUBSTEPS,
   RoomUpdateType,
   SystemPacketType,
-  applyDeterministicFlappyJump,
+  calculateFlappyRopeConnections,
   createFlappyPhysicsRuntime,
   destroyFlappyPhysicsRuntime,
   getDefaultConfig,
@@ -21,12 +26,11 @@ import {
   type PersistedGameSession,
 } from '../src/games/gameSession';
 import type { GameSocket, GameTransport } from '../src/network/transport';
+import { getSmoothingAlpha } from '../../client/src/game/scene/flappybirds/interpolation';
 import {
-  getPredictionFrames,
-  getSmoothingAlpha,
-} from '../../client/src/game/scene/flappybirds/interpolation';
-import { FlappyRenderSimulation } from '../../client/src/game/scene/flappybirds/FlappyRenderSimulation';
-import type { BirdPosition } from '../../client/src/game/types/flappybird.types';
+  calculateInitialRemainingMs,
+  calculateRemainingSeconds,
+} from '../../client/src/game/utils/timerDeadline';
 import { FixedStepClock } from '../src/games/instances/fixedStepClock';
 import { FlappyBirdInstance } from '../src/games/instances/FlappyBirdInstance';
 
@@ -61,6 +65,10 @@ class TestSocket {
       waiters.push(resolve);
       this.waiters.set(type, waiters);
     });
+  }
+
+  has(type: string): boolean {
+    return this.queued.some((packet) => packet.type === type);
   }
 
   close(): void {
@@ -233,11 +241,41 @@ describe('Orak Garak Worker', () => {
   it('finishes an Apple round through a Durable Object alarm', async () => {
     const roomId = await createRoom();
     const joined = await join(roomId, '알람');
+    joined.socket.send({
+      type: SystemPacketType.GAME_CONFIG_UPDATE_REQ,
+      selectedGameType: GameType.APPLE_GAME,
+      gameConfig: {
+        gridCols: 20,
+        gridRows: 10,
+        minNumber: 1,
+        maxNumber: 9,
+        totalTime: 30,
+        includeZero: false,
+      },
+    });
+    await joined.socket.next(SystemPacketType.GAME_CONFIG_UPDATE);
     joined.socket.send({ type: SystemPacketType.GAME_START_REQ });
-    await joined.socket.next(SystemPacketType.SET_TIME);
+    const timerPacket = await joined.socket.next(SystemPacketType.SET_TIME);
+    expect(timerPacket).toMatchObject({
+      limitTime: 30,
+      remainingMs: 30_000,
+    });
+    expect(timerPacket.endsAt).toBe(
+      Number(timerPacket.serverStartTime) + 30_000,
+    );
+
+    // 조기 호출은 종료하지 않고 동일 deadline으로 다시 예약한다.
+    expect(
+      await runDurableObjectAlarm(env.GAME_ROOMS.getByName(roomId)),
+    ).toBe(true);
+    expect(joined.socket.has(SystemPacketType.TIME_END)).toBe(false);
 
     const endPacket = joined.socket.next(SystemPacketType.TIME_END);
+    const dateSpy = vi
+      .spyOn(Date, 'now')
+      .mockReturnValue(Number(timerPacket.endsAt));
     const ran = await runDurableObjectAlarm(env.GAME_ROOMS.getByName(roomId));
+    dateSpy.mockRestore();
     expect(ran).toBe(true);
     expect((await endPacket).results).toHaveLength(1);
   });
@@ -264,199 +302,240 @@ describe('Orak Garak Worker', () => {
   });
 });
 
-describe('Flappy rendering interpolation', () => {
-  it('predicts between 20Hz snapshots but caps long network stalls', () => {
-    expect(getPredictionFrames(50)).toBeCloseTo(3, 5);
-    expect(getPredictionFrames(100)).toBeCloseTo(6, 5);
-    expect(getPredictionFrames(500)).toBeCloseTo(6, 5);
-  });
-
+describe('Authoritative game rendering', () => {
   it('uses frame-time independent smoothing', () => {
     const oneFrame = getSmoothingAlpha(1000 / 60);
+    expect(oneFrame).toBeCloseTo(0.3, 5);
     const twoFrames = 1 - (1 - oneFrame) ** 2;
     expect(getSmoothingAlpha(1000 / 30)).toBeCloseTo(twoFrames, 5);
   });
-});
 
-describe('Flappy client render simulation', () => {
-  const preset = getDefaultConfig(GameType.FLAPPY_BIRD) as FlappyBirdGamePreset;
-  const config = resolveFlappyBirdPreset(preset);
-  const seed = 0x5eed1234;
-  const roundId = 'round-test';
-
-  function initialBirds(playerCount = 1): BirdPosition[] {
-    const runtime = createFlappyPhysicsRuntime(playerCount, config.connectAll);
-    const birds = snapshotFlappyBirds(runtime.birds).map((bird, index) => ({
-      playerId: String(index),
-      x: bird.x,
-      y: bird.y,
-      velocityX: bird.vx,
-      velocityY: bird.vy,
-      angle: bird.angle,
-    }));
-    destroyFlappyPhysicsRuntime(runtime);
-    return birds;
-  }
-
-  function initialize(simulation: FlappyRenderSimulation): BirdPosition[] {
-    const birds = initialBirds();
-    simulation.applySnapshot({
-      tick: 0,
-      birds,
-      lastProcessedInputSeqs: [0],
-      lastFlapTicks: [0],
-      localPlayerIndex: 0,
-      roundId,
-      physicsSeed: seed,
-      config,
-      receivedAt: 0,
-      force: true,
-    });
-    return birds;
-  }
-
-  it('keeps shared Matter physics deterministic for 600 ticks', () => {
-    const left = createFlappyPhysicsRuntime(4, true);
-    const right = createFlappyPhysicsRuntime(4, true);
-    const leftFlaps = [0, 0, 0, 0];
-    const rightFlaps = [0, 0, 0, 0];
-    const sequences = [0, 0, 0, 0];
-
-    for (let tick = 1; tick <= 600; tick += 1) {
-      for (let playerIndex = 0; playerIndex < 4; playerIndex += 1) {
-        if (tick % (37 + playerIndex * 5) !== 0) continue;
-        const inputSeq = ++sequences[playerIndex];
-        applyDeterministicFlappyJump(
-          left.birds,
-          playerIndex,
-          inputSeq,
-          seed,
-          config,
-        );
-        applyDeterministicFlappyJump(
-          right.birds,
-          playerIndex,
-          inputSeq,
-          seed,
-          config,
-        );
-        leftFlaps[playerIndex] = tick - 1;
-        rightFlaps[playerIndex] = tick - 1;
-      }
-      stepFlappyBirdPhysics({
-        runtime: left,
-        tick,
-        lastFlapTicks: leftFlaps,
-        config: { ...config, connectAll: true },
-      });
-      stepFlappyBirdPhysics({
-        runtime: right,
-        tick,
-        lastFlapTicks: rightFlaps,
-        config: { ...config, connectAll: true },
-      });
-    }
-
-    const leftBirds = snapshotFlappyBirds(left.birds);
-    const rightBirds = snapshotFlappyBirds(right.birds);
-    for (let index = 0; index < leftBirds.length; index += 1) {
-      for (const field of ['x', 'y', 'vx', 'vy', 'angle'] as const) {
-        expect(
-          Math.abs(leftBirds[index][field] - rightBirds[index][field]),
-        ).toBeLessThan(0.01);
-      }
-    }
-    destroyFlappyPhysicsRuntime(left);
-    destroyFlappyPhysicsRuntime(right);
+  it('derives timers from a monotonic deadline instead of callback counts', () => {
+    const remainingMs = calculateInitialRemainingMs(
+      30,
+      { remainingMs: 30_000, receivedAt: 1_000 },
+      1_250,
+      50_000,
+    );
+    expect(remainingMs).toBe(29_750);
+    expect(calculateRemainingSeconds(30_000, 29_999)).toBeCloseTo(0.001, 5);
+    expect(calculateRemainingSeconds(30_000, 30_000)).toBe(0);
   });
 
-  it('keeps y unchanged on the input frame and rises on the next RAF', () => {
-    const simulation = new FlappyRenderSimulation();
-    initialize(simulation);
-    const before = simulation.getBirds()[0].y;
-
-    simulation.applyLocalJump(0, 1);
-
-    expect(simulation.getBirds()[0].y).toBe(before);
-    expect(simulation.update(1000 / 60, 1000 / 60)[0].y).toBeLessThan(before);
-  });
-
-  it('does not apply a locally predicted jump twice when its ack arrives early', () => {
-    const simulation = new FlappyRenderSimulation();
-    const birds = initialize(simulation);
-    const authority = createFlappyPhysicsRuntime(1, false, [
-      {
-        x: birds[0].x,
-        y: birds[0].y,
-        vx: birds[0].velocityX,
-        vy: birds[0].velocityY,
-        angle: birds[0].angle,
-      },
-    ]);
-
-    simulation.applyLocalJump(0, 1);
-    simulation.applyInputApplied({
-      roundId,
-      playerIndex: 0,
-      inputSeq: 1,
-      applyTick: 1,
-    });
-    const predicted = simulation.update(1000 / 60, 1000 / 60)[0];
-
-    applyDeterministicFlappyJump(authority.birds, 0, 1, seed, config);
-    stepFlappyBirdPhysics({
-      runtime: authority,
-      tick: 1,
-      lastFlapTicks: [0],
-      config,
-    });
-    const expected = snapshotFlappyBirds(authority.birds)[0];
-    expect(predicted.y).toBeCloseTo(expected.y, 2);
-    expect(predicted.velocityY).toBeCloseTo(expected.vy, 2);
-    destroyFlappyPhysicsRuntime(authority);
-  });
-
-  it('stays within 1px of authority half a second after a jump', () => {
-    const simulation = new FlappyRenderSimulation();
-    const birds = initialize(simulation);
-    const authority = createFlappyPhysicsRuntime(1, false, [
-      {
-        x: birds[0].x,
-        y: birds[0].y,
-        vx: birds[0].velocityX,
-        vy: birds[0].velocityY,
-        angle: birds[0].angle,
-      },
-    ]);
-    simulation.applyLocalJump(0, 1);
-    applyDeterministicFlappyJump(authority.birds, 0, 1, seed, config);
-
-    for (let tick = 1; tick <= 30; tick += 1) {
-      simulation.update(1000 / 60, (tick * 1000) / 60);
-      stepFlappyBirdPhysics({
-        runtime: authority,
-        tick,
-        lastFlapTicks: [0],
-        config,
-      });
-    }
-    const predicted = simulation.getBirds()[0];
-    const expected = snapshotFlappyBirds(authority.birds)[0];
-    expect(Math.abs(predicted.y - expected.y)).toBeLessThan(1);
-    destroyFlappyPhysicsRuntime(authority);
-  });
-
-  it('hard resynchronizes after a long inactive frame', () => {
-    const simulation = new FlappyRenderSimulation();
-    const birds = initialize(simulation);
-    const afterStall = simulation.update(300, 300)[0];
-
-    expect(afterStall.x).toBe(birds[0].x);
-    expect(afterStall.y).toBe(birds[0].y);
+  it('uses the original five Matter substeps and 60Hz snapshots', () => {
+    expect(FLAPPY_PHYSICS_SUBSTEPS).toBe(5);
+    expect(FLAPPY_NETWORK_FPS).toBe(60);
   });
 });
 
 describe('Flappy server input sequencing', () => {
+  it('matches the original Matter update order for 600 ticks', () => {
+    const resolved = resolveFlappyBirdPreset(
+      getDefaultConfig(GameType.FLAPPY_BIRD) as FlappyBirdGamePreset,
+    );
+    const actual = createFlappyPhysicsRuntime(4, resolved.connectAll);
+    const reference = createFlappyPhysicsRuntime(4, resolved.connectAll);
+    const actualLastFlaps = [0, 0, 0, 0];
+    const referenceLastFlaps = [0, 0, 0, 0];
+    const connections = calculateFlappyRopeConnections(4, resolved.connectAll);
+
+    const clampCeiling = (birds: readonly Matter.Body[]) => {
+      for (const bird of birds) {
+        if (bird.position.y - FLAPPY_PHYSICS.BIRD_HEIGHT / 2 > 0) continue;
+        Matter.Body.setPosition(bird, {
+          x: bird.position.x,
+          y: FLAPPY_PHYSICS.BIRD_HEIGHT / 2,
+        });
+        if (bird.velocity.y < 0) {
+          Matter.Body.setVelocity(bird, { x: bird.velocity.x, y: 0 });
+        }
+      }
+    };
+
+    const originalStep = (tick: number) => {
+      for (let index = 0; index < reference.birds.length; index += 1) {
+        const bird = reference.birds[index];
+        const baseForwardSpeed = resolved.pipeSpeed * 1.5;
+        const framesSinceFlap = tick - referenceLastFlaps[index];
+        const noFlapPenalty = framesSinceFlap > 30 ? 0.97 : 0.995;
+        const velocityX =
+          bird.velocity.x < baseForwardSpeed
+            ? bird.velocity.x + 0.05
+            : bird.velocity.x * noFlapPenalty;
+        Matter.Body.setVelocity(bird, { x: velocityX, y: bird.velocity.y });
+      }
+
+      for (const [indexA, indexB] of connections) {
+        const birdA = reference.birds[indexA];
+        const birdB = reference.birds[indexB];
+        const dx = birdB.position.x - birdA.position.x;
+        const dy = birdB.position.y - birdA.position.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance === 0 || distance <= resolved.ropeLength) continue;
+        const nx = dx / distance;
+        const ny = dy / distance;
+        const correction = (distance - resolved.ropeLength) / 2;
+        Matter.Body.setPosition(birdA, {
+          x: birdA.position.x + nx * correction,
+          y: birdA.position.y + ny * correction,
+        });
+        Matter.Body.setPosition(birdB, {
+          x: birdB.position.x - nx * correction,
+          y: birdB.position.y - ny * correction,
+        });
+        const separatingSpeed =
+          (birdB.velocity.x - birdA.velocity.x) * nx +
+          (birdB.velocity.y - birdA.velocity.y) * ny;
+        if (separatingSpeed > 0) {
+          const adjust = separatingSpeed / 2;
+          Matter.Body.setVelocity(birdA, {
+            x: birdA.velocity.x + nx * adjust,
+            y: birdA.velocity.y + ny * adjust,
+          });
+          Matter.Body.setVelocity(birdB, {
+            x: birdB.velocity.x - nx * adjust,
+            y: birdB.velocity.y - ny * adjust,
+          });
+        }
+      }
+
+      for (const bird of reference.birds) {
+        const angle = Math.max(-30, Math.min(90, bird.velocity.y * 10));
+        Matter.Body.setAngle(bird, angle * (Math.PI / 180));
+      }
+      for (let substep = 0; substep < 5; substep += 1) {
+        Matter.Engine.update(reference.engine, FLAPPY_PHYSICS_FRAME_MS / 5);
+        clampCeiling(reference.birds);
+      }
+    };
+
+    for (let tick = 1; tick <= 600; tick += 1) {
+      if (tick % 24 === 1) {
+        const playerIndex = Math.floor(tick / 24) % 4;
+        const velocity = { x: 1.25 + playerIndex * 0.1, y: -7.2 };
+        Matter.Body.setVelocity(actual.birds[playerIndex], velocity);
+        Matter.Body.setVelocity(reference.birds[playerIndex], velocity);
+        actualLastFlaps[playerIndex] = tick;
+        referenceLastFlaps[playerIndex] = tick;
+      }
+
+      stepFlappyBirdPhysics({
+        runtime: actual,
+        tick,
+        lastFlapTicks: actualLastFlaps,
+        config: resolved,
+        onSubstep: () => {
+          clampCeiling(actual.birds);
+          return true;
+        },
+      });
+      originalStep(tick);
+    }
+
+    const actualBirds = snapshotFlappyBirds(actual.birds);
+    const referenceBirds = snapshotFlappyBirds(reference.birds);
+    for (let index = 0; index < actualBirds.length; index += 1) {
+      expect(actualBirds[index].x).toBeCloseTo(referenceBirds[index].x, 2);
+      expect(actualBirds[index].y).toBeCloseTo(referenceBirds[index].y, 2);
+      expect(actualBirds[index].vx).toBeCloseTo(referenceBirds[index].vx, 2);
+      expect(actualBirds[index].vy).toBeCloseTo(referenceBirds[index].vy, 2);
+      expect(actualBirds[index].angle).toBeCloseTo(
+        referenceBirds[index].angle,
+        2,
+      );
+    }
+    destroyFlappyPhysicsRuntime(actual);
+    destroyFlappyPhysicsRuntime(reference);
+  });
+
+  it('clamps an upward-moving bird to the ceiling without ending the round', () => {
+    const socket: GameSocket = {
+      id: 'p0',
+      emit: () => undefined,
+      to: () => ({ emit: () => undefined }),
+      disconnect: () => undefined,
+    };
+    const transport: GameTransport = {
+      sockets: { sockets: new Map([['p0', socket]]) },
+      to: () => ({ emit: () => undefined }),
+      scheduleAlarm: async () => undefined,
+      clearAlarm: async () => undefined,
+    };
+    const session = new GameSession(transport, 'abcdefghij');
+    session.addPlayer('p0', '첫째');
+    const game = new FlappyBirdInstance(session);
+    game.initialize(
+      getDefaultConfig(GameType.FLAPPY_BIRD) as FlappyBirdGamePreset,
+    );
+    const internal = game as unknown as {
+      birds: Matter.Body[];
+      checkCollisions: () => boolean;
+    };
+    const bird = internal.birds[0];
+    Matter.Body.setPosition(bird, { x: bird.position.x, y: 1 });
+    Matter.Body.setVelocity(bird, { x: bird.velocity.x, y: -5 });
+
+    expect(internal.checkCollisions()).toBe(true);
+    expect(bird.position.y).toBe(FLAPPY_PHYSICS.BIRD_HEIGHT / 2);
+    expect(bird.velocity.y).toBe(0);
+    expect(session.status).not.toBe('ended');
+    game.destroy();
+  });
+
+  it('keeps two authoritative birds within the original rope constraint', () => {
+    const socketsById = new Map<string, GameSocket>();
+    for (const id of ['p0', 'p1']) {
+      socketsById.set(id, {
+        id,
+        emit: () => undefined,
+        to: () => ({ emit: () => undefined }),
+        disconnect: () => undefined,
+      });
+    }
+    const transport: GameTransport = {
+      sockets: { sockets: socketsById },
+      to: () => ({ emit: () => undefined }),
+      scheduleAlarm: async () => undefined,
+      clearAlarm: async () => undefined,
+    };
+    const session = new GameSession(transport, 'abcdefghij');
+    session.addPlayer('p0', '첫째');
+    session.addPlayer('p1', '둘째');
+    const game = new FlappyBirdInstance(session);
+    game.initialize(
+      getDefaultConfig(GameType.FLAPPY_BIRD) as FlappyBirdGamePreset,
+    );
+    const internal = game as unknown as {
+      birds: Matter.Body[];
+      physicsUpdate: () => void;
+      ropeLength: number;
+    };
+    const sequences = [0, 0];
+    let maxDistance = 0;
+
+    for (let tick = 0; tick < 120; tick += 1) {
+      if (tick % 8 === 0) {
+        const playerIndex = (tick / 8) % 2;
+        game.handlePacket(socketsById.get(`p${playerIndex}`)!, playerIndex, {
+          type: FlappyBirdPacketType.FLAPPY_JUMP,
+          inputSeq: ++sequences[playerIndex],
+        });
+      }
+      internal.physicsUpdate();
+      if (internal.birds.length < 2) break;
+      maxDistance = Math.max(
+        maxDistance,
+        Math.hypot(
+          internal.birds[1].position.x - internal.birds[0].position.x,
+          internal.birds[1].position.y - internal.birds[0].position.y,
+        ),
+      );
+    }
+
+    expect(maxDistance).toBeLessThanOrEqual(internal.ropeLength + 5);
+    game.destroy();
+  });
+
   it('ignores duplicate and reversed inputs and keeps player acks isolated', () => {
     const emitted: Array<{ event: string; data: unknown }> = [];
     const broadcasts: Array<{ event: string; data: unknown }> = [];
@@ -543,7 +622,7 @@ describe('Flappy server input sequencing', () => {
     game.destroy();
   });
 
-  it('runs physics near 60Hz while broadcasting no more than 20 snapshots', () => {
+  it('runs physics near 60Hz while broadcasting no more than 60 snapshots', () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const broadcasts: Array<{ event: string; data: unknown }> = [];
@@ -581,15 +660,15 @@ describe('Flappy server input sequencing', () => {
 
     expect(sync.tick).toBeGreaterThanOrEqual(59);
     expect(sync.tick).toBeLessThanOrEqual(60);
-    expect(snapshots.length).toBeGreaterThanOrEqual(19);
-    expect(snapshots.length).toBeLessThanOrEqual(20);
+    expect(snapshots.length).toBeGreaterThanOrEqual(59);
+    expect(snapshots.length).toBeLessThanOrEqual(60);
     game.destroy();
     vi.useRealTimers();
   });
 });
 
 describe('Flappy fixed-step scheduling', () => {
-  it('runs three 60Hz physics steps for each 20Hz network interval', () => {
+  it('runs three 60Hz physics steps after a 50ms runtime stall', () => {
     const clock = new FixedStepClock(1000 / 60, 6);
     clock.reset(1_000);
 

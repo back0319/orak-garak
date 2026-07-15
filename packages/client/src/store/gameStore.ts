@@ -30,6 +30,14 @@ export interface GameResult {
   score: number;
 }
 
+export interface GameTimerState {
+  limitTime: number;
+  serverStartTime: number;
+  endsAt?: number;
+  remainingMs?: number;
+  receivedAt: number;
+}
+
 // 1. 상태 인터페이스 정의
 interface GameState {
   count: number;
@@ -65,6 +73,9 @@ interface GameState {
   // 서버 게임 시작 시간 (타이머 동기화용)
   serverStartTime: number | null;
   setServerStartTime: (time: number) => void;
+
+  gameTimer: GameTimerState | null;
+  setGameTimer: (timer: GameTimerState) => void;
 
   // 게임 시작 여부
   isGameStarted: boolean;
@@ -157,6 +168,7 @@ export const useGameStore = create<GameState>()(
     appleField: null,
     gameTime: null,
     serverStartTime: null,
+    gameTimer: null,
     isGameStarted: false,
     gameReady: false,
     dropCellEventQueue: [],
@@ -185,6 +197,12 @@ export const useGameStore = create<GameState>()(
     setAppleField: (apples: number[]) => set({ appleField: apples }),
     setGameTime: (time: number) => set({ gameTime: time }),
     setServerStartTime: (time: number) => set({ serverStartTime: time }),
+    setGameTimer: (timer: GameTimerState) =>
+      set({
+        gameTimer: timer,
+        gameTime: timer.limitTime,
+        serverStartTime: timer.serverStartTime,
+      }),
     setGameStarted: (started: boolean) => set({ isGameStarted: started }),
     setGameReady: (ready: boolean) => set({ gameReady: ready }),
     addDropCellEvent: (event: DropCellEvent) =>
@@ -212,6 +230,7 @@ export const useGameStore = create<GameState>()(
         appleField: null,
         gameTime: null,
         serverStartTime: null,
+        gameTimer: null,
         isGameStarted: false,
         dropCellEventQueue: [],
         otherPlayerDrags: new Map<number, DragAreaData>(),

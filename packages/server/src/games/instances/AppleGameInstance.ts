@@ -8,7 +8,6 @@ import {
   AppleGamePacket,
   AppleGamePacketType,
   DropCellIndexPacket,
-  ReadyScenePacket,
   SetFieldPacket,
   SetTimePacket,
   SystemPacketType,
@@ -71,19 +70,15 @@ export class AppleGameInstance implements GameInstance {
     console.log('[appleGameInstance/start] setfield');
     this.session.broadcastPacket(setFieldPacket);
 
-    // ready_scene
-    const readyScenePacket: ReadyScenePacket = {
-      type: SystemPacketType.READY_SCENE,
-      selectedGameType: this.session.selectedGameType,
-    };
-    console.log('[appleGameInstance/start] readyscene');
-    this.session.broadcastPacket(readyScenePacket);
-
     // Broadcast Time
+    const serverStartTime = Date.now();
+    this.endsAt = serverStartTime + this.timeLeft * 1000;
     const setTimePacket: SetTimePacket = {
       type: SystemPacketType.SET_TIME,
       limitTime: this.timeLeft,
-      serverStartTime: Date.now(), // 서버 시작 시간 전송
+      serverStartTime,
+      endsAt: this.endsAt,
+      remainingMs: this.endsAt - serverStartTime,
     };
     this.session.broadcastPacket(setTimePacket);
 
@@ -144,9 +139,14 @@ export class AppleGameInstance implements GameInstance {
   }
 
   handleAlarm(): void {
-    if (this.session.status === 'playing') {
-      this.finishGame();
+    if (this.session.status !== 'playing') return;
+
+    const now = Date.now();
+    if (now < this.endsAt) {
+      void this.session.io.scheduleAlarm(this.endsAt);
+      return;
     }
+    this.finishGame();
   }
 
   // todo 얘내 gameSession으로 빼내야 함
@@ -255,7 +255,6 @@ export class AppleGameInstance implements GameInstance {
 
   private startTimer() {
     console.log('[GameSession] Timer started with', this.timeLeft, 'seconds');
-    this.endsAt = Date.now() + this.timeLeft * 1000;
     void this.session.io.scheduleAlarm(this.endsAt);
   }
 

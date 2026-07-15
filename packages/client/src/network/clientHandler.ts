@@ -170,8 +170,13 @@ export const handleServerPacket = (packet: ServerPacket) => {
 
     case SystemPacketType.SET_TIME: {
       const store = useGameStore.getState();
-      store.setGameTime(packet.limitTime);
-      store.setServerStartTime(packet.serverStartTime);
+      store.setGameTimer({
+        limitTime: packet.limitTime,
+        serverStartTime: packet.serverStartTime,
+        endsAt: packet.endsAt,
+        remainingMs: packet.remainingMs,
+        receivedAt: performance.now(),
+      });
       console.log(
         'SET_TIME packet received:',
         packet.limitTime,
@@ -261,16 +266,12 @@ export const handleServerPacket = (packet: ServerPacket) => {
     }
 
     case FlappyBirdPacketType.FLAPPY_INPUT_APPLIED: {
-      window.dispatchEvent(
-        new CustomEvent('flappy:input_applied', { detail: packet }),
-      );
+      // 구버전 클라이언트 호환용 패킷. 현재 렌더링은 서버 좌표만 사용한다.
       break;
     }
 
     case FlappyBirdPacketType.FLAPPY_CLOCK_PONG: {
-      window.dispatchEvent(
-        new CustomEvent('flappy:clock_pong', { detail: packet }),
-      );
+      // 구버전 클라이언트 호환용 패킷. 현재 클라이언트는 clock 예측을 하지 않는다.
       break;
     }
 

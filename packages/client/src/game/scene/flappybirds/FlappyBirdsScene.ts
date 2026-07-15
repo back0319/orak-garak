@@ -31,14 +31,10 @@ import { resolveFlappyBirdPreset } from '../../../../../common/src/config';
 import {
   FlappyBirdPacketType,
   type FlappyJumpPacket,
-  type FlappyClockPingPacket,
-  type FlappyInputAppliedPacket,
-  type FlappyClockPongPacket,
   type FlappyRequestSyncPacket,
 } from '../../../../../common/src/packets';
 import PipeManager from './PipeManager';
 import { getSmoothingAlpha } from './interpolation';
-import { FlappyRenderSimulation } from './FlappyRenderSimulation';
 import { useGameStore } from '../../../store/gameStore';
 import { socketManager } from '../../../network/socket';
 
@@ -76,9 +72,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
   // 새 스프라이트
   private birdSprites: Phaser.GameObjects.Sprite[] = [];
   private targetPositions: BirdPosition[] = [];
-  private renderSimulation = new FlappyRenderSimulation();
   private nextInputSeq = 1;
-  private clockSyncTimer?: number;
 
   // 바닥 (무한 스크롤용)
   private groundTile!: Phaser.GameObjects.TileSprite;
@@ -154,7 +148,6 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     // 기존 상태 초기화 (중복 생성 방지)
     this.birdSprites = [];
     this.targetPositions = [];
-    this.renderSimulation.reset();
     this.ropes = [];
     this.ropeMidPoints = [];
     this.ropePoints = [];
@@ -165,10 +158,6 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     this.isGameOver = false;
     this.pendingGameOverFromSync = false;
     this.nextInputSeq = 1;
-    if (this.clockSyncTimer !== undefined) {
-      window.clearInterval(this.clockSyncTimer);
-      this.clockSyncTimer = undefined;
-    }
 
     this.editorCreate();
 
@@ -269,51 +258,12 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       }
     };
 
-    const handleInputApplied = (event: Event) => {
-      const packet = (event as CustomEvent<FlappyInputAppliedPacket>).detail;
-      this.renderSimulation.applyInputApplied(packet);
-    };
-
-    const handleClockPong = (event: Event) => {
-      const packet = (event as CustomEvent<FlappyClockPongPacket>).detail;
-      this.renderSimulation.observeClockPong(
-        packet.clientSentAt,
-        packet.serverTick,
-        performance.now(),
-        packet.roundId,
-      );
-    };
-
     window.addEventListener('flappy:sync_state', handleSyncState);
-    window.addEventListener('flappy:input_applied', handleInputApplied);
-    window.addEventListener('flappy:clock_pong', handleClockPong);
 
     // 씬 종료 시 리스너 제거를 위해 저장
     this.events.once('shutdown', () => {
       window.removeEventListener('flappy:sync_state', handleSyncState);
-      window.removeEventListener('flappy:input_applied', handleInputApplied);
-      window.removeEventListener('flappy:clock_pong', handleClockPong);
-      if (this.clockSyncTimer !== undefined) {
-        window.clearInterval(this.clockSyncTimer);
-        this.clockSyncTimer = undefined;
-      }
     });
-  }
-
-  private ensureClockSync(): void {
-    if (isMockMode() || this.clockSyncTimer !== undefined) return;
-    const sendPing = () => {
-      const roundId = this.renderSimulation.getRoundId();
-      if (!roundId || this.isGameOver) return;
-      const packet: FlappyClockPingPacket = {
-        type: FlappyBirdPacketType.FLAPPY_CLOCK_PING,
-        roundId,
-        clientSentAt: performance.now(),
-      };
-      socketManager.send(packet);
-    };
-    sendPing();
-    this.clockSyncTimer = window.setInterval(sendPing, 2_000);
   }
 
   /**
@@ -436,11 +386,8 @@ export default class FlappyBirdsScene extends Phaser.Scene {
         cameraX: state.flappyCameraX,
         isGameOver: state.isFlappyGameOver,
         gameOverData: state.flappyGameOverData,
-        tick: state.flappyServerTick,
         lastProcessedInputSeqs: state.flappyLastProcessedInputSeqs,
         roundId: state.flappyRoundId,
-        physicsSeed: state.flappyPhysicsSeed,
-        lastFlapTicks: state.flappyLastFlapTicks,
       }),
       (current, previous) => {
         // pendingGameOverFromSync 상태에서 birds 데이터가 도착하면 게임 오버 처리
@@ -499,18 +446,6 @@ export default class FlappyBirdsScene extends Phaser.Scene {
             velocityY: bird.vy,
             angle: bird.angle,
           }));
-          this.renderSimulation.applySnapshot({
-            tick: current.tick,
-            birds: this.targetPositions,
-            lastProcessedInputSeqs: current.lastProcessedInputSeqs,
-            lastFlapTicks: current.lastFlapTicks,
-            localPlayerIndex: Number(this.myPlayerId),
-            roundId: current.roundId ?? undefined,
-            physicsSeed: current.physicsSeed,
-            config: this.gameConfig,
-            receivedAt: performance.now(),
-          });
-          this.ensureClockSync();
         }
 
         // 파이프 데이터 업데이트
@@ -545,7 +480,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
           current.gameOverData
         ) {
           // 서버의 충돌 판정은 최종 권위 상태로 보관하되, 이미 플레이 중인
-          // 화면은 방금 렌더링한 프레임에서 멈춘다. 서버 20Hz 좌표로 다시
+          // 화면은 방금 렌더링한 프레임에서 멈춘다. 서버 최종 좌표로 다시
           // 이동시키면 모달이 뜨기 직전에 새와 카메라가 한 번 튀어 보인다.
           const preserveDisplayedFrame =
             this.gameStarted && this.hasDisplayedBirdFrame();
@@ -579,9 +514,16 @@ export default class FlappyBirdsScene extends Phaser.Scene {
             timestamp: Date.now(),
           };
 
-          this.events.emit('gameEnd', {
+          const gameEndPayload = {
             ...gameEndData,
             players: this.getPlayersData(),
+          };
+
+          // 충돌 프레임을 한 번 그린 뒤 React 결과 모달을 연다. 같은 이벤트
+          // 턴에서 모달을 열면 Phaser 캔버스가 마지막 위치를 그리기 전에
+          // 레이아웃이 바뀌어 충돌 순간이 끊겨 보일 수 있다.
+          requestAnimationFrame(() => {
+            this.events.emit('gameEnd', gameEndPayload);
           });
 
           console.log(
@@ -604,7 +546,6 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     this.groundTile?.destroy();
     this.ropes = [];
     this.targetPositions = [];
-    this.renderSimulation.reset();
     this.ropeMidPoints = []; // 밧줄 관성 데이터 초기화 (누행 방지)
     this.ropePoints = [];
     this.isGameOver = false; // 상태 초기화
@@ -661,8 +602,6 @@ export default class FlappyBirdsScene extends Phaser.Scene {
         angle: 0,
       });
     }
-
-    this.renderSimulation.reset();
 
     console.log(
       `[FlappyBirdsScene] ${count}개의 새(스프라이트) 생성 완료 (connectAll=${this.gameConfig.connectAll})`,
@@ -1019,17 +958,13 @@ export default class FlappyBirdsScene extends Phaser.Scene {
         timestamp: Date.now(),
       });
     } else {
-      const playerIndex = Number(this.myPlayerId);
       const inputSeq = this.nextInputSeq++;
-
-      // 입력 프레임에 먼저 로컬 물리를 반영한다. 네트워크와 사운드는 그 뒤다.
-      this.renderSimulation.applyLocalJump(playerIndex, inputSeq);
 
       const jumpPacket: FlappyJumpPacket = {
         type: FlappyBirdPacketType.FLAPPY_JUMP,
         timestamp: Date.now(),
         inputSeq,
-        roundId: this.renderSimulation.getRoundId() || undefined,
+        roundId: useGameStore.getState().flappyRoundId || undefined,
       };
       socketManager.send(jumpPacket);
     }
@@ -1077,33 +1012,24 @@ export default class FlappyBirdsScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number) {
-    // 서버는 판정을 담당하고, 클라이언트는 스냅샷 사이를 60Hz로 시뮬레이션한다.
+    // 서버가 물리와 판정을 모두 담당하고 클라이언트는 좌표만 보간한다.
     const ratio = this.getRatio();
-    const renderPositions =
-      isMockMode() || this.isGameOver
-        ? this.targetPositions
-        : this.renderSimulation.update(delta);
     const smoothingAlpha = getSmoothingAlpha(delta);
     for (let i = 0; i < this.birdSprites.length; i++) {
       const sprite = this.birdSprites[i];
-      const target = renderPositions[i];
+      const target = this.targetPositions[i];
 
       if (target) {
-        if (isMockMode()) {
-          sprite.x = Phaser.Math.Linear(
-            sprite.x,
-            target.x * ratio,
-            smoothingAlpha,
-          );
-          sprite.y = Phaser.Math.Linear(
-            sprite.y,
-            target.y * ratio,
-            smoothingAlpha,
-          );
-        } else {
-          sprite.x = target.x * ratio;
-          sprite.y = target.y * ratio;
-        }
+        sprite.x = Phaser.Math.Linear(
+          sprite.x,
+          target.x * ratio,
+          smoothingAlpha,
+        );
+        sprite.y = Phaser.Math.Linear(
+          sprite.y,
+          target.y * ratio,
+          smoothingAlpha,
+        );
 
         // 회전 애니메이션: 기본적으로 서버에서 보낸 각도를 우선 사용하고,
         // 서버 각도가 0이면 velocityY를 기반으로 부드럽게 계산

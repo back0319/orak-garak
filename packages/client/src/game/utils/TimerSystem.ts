@@ -13,6 +13,11 @@ function rgbToHex([r, g, b]: number[]): number {
 import Phaser from 'phaser';
 import timerPrefab from './TimerPrefab';
 import AppleGameManager from '../scene/apple/AppleGameManager';
+import {
+  calculateInitialRemainingMs,
+  calculateRemainingSeconds,
+  type TimerTiming,
+} from './timerDeadline';
 
 /** 타이머 이벤트 타입 */
 export const TimerEvents = {
@@ -28,8 +33,7 @@ export default class TimerSystem {
   private totalTime = 0;
   private remainingTime = 0;
 
-  // 서버 타임스탬프 (탭 전환 시 재동기화용)
-  private serverStartTimestamp = 0;
+  private deadlineTimestamp = 0;
 
   private updateIntervalId?: number; // setInterval ID (비활성 창에서도 동작)
   private lastSecond = -1; // 초 단위 변화 감지용
@@ -73,9 +77,10 @@ export default class TimerSystem {
 
   /** 타이머 동기화 (탭 전환 후 복귀 시) */
   private syncTimer(): void {
-    const now = Date.now();
-    const elapsed = (now - this.serverStartTimestamp) / 1000;
-    this.remainingTime = Math.max(0, this.totalTime - elapsed);
+    this.remainingTime = calculateRemainingSeconds(
+      this.deadlineTimestamp,
+      performance.now(),
+    );
 
     // 바 스케일 즉시 업데이트
     const ratio = this.ratio;
@@ -88,19 +93,27 @@ export default class TimerSystem {
   }
 
   /** 전체 시간을 설정하고 타이머를 시작합니다. */
-  start(totalSeconds: number, serverStartTime?: number): void {
-    if (totalSeconds <= 0) return;
+  start(totalSeconds: number, timing?: TimerTiming | number): void {
+    this.stop();
+    if (totalSeconds <= 0) {
+      this.finish();
+      return;
+    }
 
     this.totalTime = totalSeconds;
     this.isFinished = false;
 
-    // 서버 시작 시간 저장 (탭 전환 시 재동기화용)
-    this.serverStartTimestamp = serverStartTime || Date.now();
-
-    // 초기 남은 시간 계산 (서버 시작 시간 기준)
-    const now = Date.now();
-    const alreadyElapsed = (now - this.serverStartTimestamp) / 1000;
-    this.remainingTime = Math.max(0, totalSeconds - alreadyElapsed);
+    const monotonicNow = performance.now();
+    const normalizedTiming =
+      typeof timing === 'number' ? { serverStartTime: timing } : timing;
+    const initialRemainingMs = calculateInitialRemainingMs(
+      totalSeconds,
+      normalizedTiming,
+      monotonicNow,
+      Date.now(),
+    );
+    this.deadlineTimestamp = monotonicNow + initialRemainingMs;
+    this.remainingTime = initialRemainingMs / 1000;
     this.lastSecond = Math.ceil(this.remainingTime);
 
     // 초기 상태 - 바를 현재 비율로 설정
@@ -114,16 +127,18 @@ export default class TimerSystem {
     }, 16); // ~60fps
 
     console.log(
-      `⏱️ 타이머 시작: ${totalSeconds}초 (초기 남은 시간: ${this.remainingTime.toFixed(1)}초, 서버 시작: ${serverStartTime ? new Date(serverStartTime).toISOString() : '로컬'})`,
+      `⏱️ 타이머 시작: ${totalSeconds}초 (초기 남은 시간: ${this.remainingTime.toFixed(1)}초)`,
     );
   }
 
-  /** 매 프레임 업데이트 - 단순 감소 방식 */
+  /** 콜백 지연과 무관하게 monotonic deadline에서 남은 시간을 계산합니다. */
   private update(): void {
     if (this.isFinished) return;
 
-    // 16ms(0.016초)만큼 감소
-    this.remainingTime = Math.max(0, this.remainingTime - 0.016);
+    this.remainingTime = calculateRemainingSeconds(
+      this.deadlineTimestamp,
+      performance.now(),
+    );
 
     // 바 스케일 업데이트
     const ratio = this.ratio;
@@ -166,13 +181,18 @@ export default class TimerSystem {
   private onTimerComplete(): void {
     if (this.isFinished) return;
 
+    this.finish();
+    console.log('⏱️ 타이머 종료! 시간이 모두 소진되었습니다.');
+  }
+
+  /** 서버 종료 패킷을 받았을 때 UI를 즉시 0으로 고정합니다. */
+  finish(): void {
     this.remainingTime = 0;
     this.isFinished = true;
     this.stop();
-
-    console.log('⏱️ 타이머 종료! 시간이 모두 소진되었습니다.');
-    // this.scene.events.emit(TimerEvents.COMPLETE);
-    // this.appleGameManager?.gameEnd();
+    this.timerPrefab.setBarScale(0);
+    this.updateBarColor();
+    this.scene.events.emit(TimerEvents.TICK, 0);
   }
 
   /** 타이머 정지 */

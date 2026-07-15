@@ -116,6 +116,8 @@ export interface SetTimePacket {
   type: SystemPacketType.SET_TIME;
   limitTime: number;
   serverStartTime: number; // 서버에서 게임이 시작된 시간 (timestamp)
+  endsAt?: number;
+  remainingMs?: number;
 }
 export interface TimeEndPacket {
   type: SystemPacketType.TIME_END;

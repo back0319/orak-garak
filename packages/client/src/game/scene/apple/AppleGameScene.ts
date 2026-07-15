@@ -263,18 +263,18 @@ export default class AppleGameScene extends Phaser.Scene {
       },
     );
 
-    // SET_TIME 패킷 수신 시 타이머 시작
+    // SET_TIME 전체를 구독해 제한 시간과 서버 기준 시각을 함께 적용한다.
     this.unsubscribeGameTime = useGameStore.subscribe(
-      (state) => state.gameTime,
-      (gameTime) => {
+      (state) => state.gameTimer,
+      (gameTimer) => {
         // 씬이 파괴되었거나 비활성 상태면 무시
         if (!this.scene || !this.sys || !this.sys.game) {
           return;
         }
 
-        if (gameTime && this.isGameInitialized) {
-          console.log(`⏱️ SET_TIME 수신: ${gameTime}초`);
-          this.gameManager.startTimerWithDuration(gameTime);
+        if (gameTimer && this.isGameInitialized) {
+          console.log(`⏱️ SET_TIME 수신: ${gameTimer.limitTime}초`);
+          this.gameManager.startTimerWithDuration(gameTimer);
         }
       },
     );
@@ -331,10 +331,10 @@ export default class AppleGameScene extends Phaser.Scene {
 
     this.isGameInitialized = true;
 
-    // gameTime이 이미 설정되어 있으면 타이머 시작
-    const gameTime = useGameStore.getState().gameTime;
-    if (gameTime) {
-      this.gameManager.startTimerWithDuration(gameTime);
+    // SET_TIME이 씬 초기화보다 먼저 도착했으면 저장된 deadline으로 시작한다.
+    const gameTimer = useGameStore.getState().gameTimer;
+    if (gameTimer) {
+      this.gameManager.startTimerWithDuration(gameTimer);
     }
   }
 
