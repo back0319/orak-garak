@@ -3,7 +3,7 @@ name: Deploy Azure backend
 on:
   workflow_dispatch:
   push:
-    branches: [main, restore/original-azure]
+    branches: [main]
     paths:
       - 'packages/common/**'
       - 'packages/server/**'
