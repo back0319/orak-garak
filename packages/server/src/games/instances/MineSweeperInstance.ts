@@ -5,15 +5,15 @@
  * GameInstance 인터페이스를 구현하여 GameSession과 통합됩니다.
  */
 
-import { Socket } from 'socket.io';
+import type { GameSocket } from '../../network/transport';
 import { GameInstance } from './GameInstance';
 import { GameSession } from '../gameSession';
 import {
   GameConfig,
   MineSweeperGamePreset,
   resolveMineSweeperPreset,
-} from '../../../../common/src/config';
-import { MineSweeperPacketType } from '../../../../common/src/packets';
+} from '@main-game/common';
+import { MineSweeperPacketType } from '@main-game/common';
 import {
   TileState,
   type ServerTileData,
@@ -25,8 +25,8 @@ import {
   type MSTileUpdatePacket,
   type MSScoreUpdatePacket,
   type MSGameEndPacket,
-} from '../../../../common/src/minesweeperPackets';
-import { PLAYER_COLORS } from '../../../../common/src/common-type';
+} from '@main-game/common';
+import { PLAYER_COLORS } from '@main-game/common';
 
 /** 연쇄 타일 열기 최대 점수 (지뢰 페널티 제외) */
 const MAX_CHAIN_SCORE = 10;
@@ -46,7 +46,7 @@ export class MineSweeperInstance implements GameInstance {
   private players: Map<PlayerId, PlayerScoreData> = new Map();
   private remainingMines: number = 0;
   private totalTime: number = 180;
-  private timerInterval: NodeJS.Timeout | null = null;
+  private endsAt: number = 0;
 
   constructor(private session: GameSession) {}
 
@@ -129,9 +129,48 @@ export class MineSweeperInstance implements GameInstance {
     console.log('[MineSweeperInstance] 정리 완료');
   }
 
+  serialize(): unknown {
+    return {
+      config: this.config,
+      tiles: this.tiles,
+      players: Array.from(this.players.entries()),
+      remainingMines: this.remainingMines,
+      totalTime: this.totalTime,
+      endsAt: this.endsAt,
+    };
+  }
+
+  restore(snapshot: unknown): void {
+    const data = snapshot as {
+      config: MineSweeperConfig;
+      tiles: ServerTileData[][];
+      players: Array<[PlayerId, PlayerScoreData]>;
+      remainingMines: number;
+      totalTime: number;
+      endsAt: number;
+    };
+    this.config = data.config;
+    this.tiles = data.tiles;
+    this.players = new Map(data.players);
+    this.remainingMines = data.remainingMines;
+    this.totalTime = data.totalTime;
+    this.endsAt = data.endsAt;
+    if (this.endsAt <= Date.now()) {
+      this.triggerGameEnd('timeout');
+    } else {
+      void this.session.io.scheduleAlarm(this.endsAt);
+    }
+  }
+
+  handleAlarm(): void {
+    if (this.session.status === 'playing') {
+      this.triggerGameEnd('timeout');
+    }
+  }
+
   // ========== PACKET HANDLING ==========
 
-  handlePacket(socket: Socket, _playerIndex: number, packet: any): void {
+  handlePacket(socket: GameSocket, _playerIndex: number, packet: any): void {
     const playerId = socket.id;
     console.log(
       `[MineSweeperInstance] handlePacket 호출됨 - type: ${packet.type}, playerId: ${playerId}`,
@@ -742,25 +781,12 @@ export class MineSweeperInstance implements GameInstance {
   // ========== TIMER ==========
 
   private startTimer(): void {
-    if (this.timerInterval) {
-      clearInterval(this.timerInterval);
-    }
-
-    const startTime = Date.now();
-    const endTime = startTime + this.totalTime * 1000;
-
-    this.timerInterval = setInterval(() => {
-      if (Date.now() >= endTime) {
-        this.triggerGameEnd('timeout');
-      }
-    }, 1000);
+    this.endsAt = Date.now() + this.totalTime * 1000;
+    void this.session.io.scheduleAlarm(this.endsAt);
   }
 
   private stopTimer(): void {
-    if (this.timerInterval) {
-      clearInterval(this.timerInterval);
-      this.timerInterval = null;
-    }
+    void this.session.io.clearAlarm();
   }
 
   // ========== UTILITIES ==========
@@ -806,7 +832,7 @@ export class MineSweeperInstance implements GameInstance {
    * 게임 상태 동기화 요청 처리
    * 클라이언트가 씬 로딩 완료 후 현재 게임 상태를 요청할 때 호출
    */
-  private handleRequestSync(socket: Socket): void {
+  private handleRequestSync(socket: GameSocket): void {
     if (!this.config) {
       console.warn('[MineSweeperInstance] handleRequestSync - config 없음');
       return;

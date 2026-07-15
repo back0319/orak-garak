@@ -5,21 +5,24 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch ./src/index.ts",
-    "build": "tsc",
-    "type-check": "tsc --noEmit"
+    "dev": "wrangler dev --config ../../wrangler.jsonc",
+    "build": "tsc --noEmit",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run --maxWorkers=1 --no-isolate"
   },
   "dependencies": {
     "@main-game/common": "workspace:*",
     "matter-js": "^0.20.0",
-    "nanoid": "^5.1.6",
-    "socket.io": "^4.8.3"
+    "nanoid": "^5.1.6"
   },
   "devDependencies": {
     "@types/matter-js": "^0.20.2",
     "@types/node": "^24.10.1",
+    "@cloudflare/vitest-pool-workers": "0.18.4",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
-    "typescript": "~5.9.3"
+    "typescript": "~5.9.3",
+    "vitest": "4.1.10",
+    "wrangler": "4.110.0"
   }
 }

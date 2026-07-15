@@ -55,6 +55,8 @@ export {
   RoomUpdateType,
   type UpdateNumberPacket,
   type JoinRoomPacket,
+  type JoinAcceptedPacket,
+  type GameInterruptedPacket,
   type RoomUpdatePacket,
   type SystemMessagePacket,
   type GameConfigUpdateReqPacket,
@@ -81,9 +83,11 @@ export {
   // Flappy Bird Packets
   FlappyBirdPacketType,
   type FlappyJumpPacket,
+  type FlappyRequestSyncPacket,
   type FlappyWorldStatePacket,
   type FlappyScoreUpdatePacket,
   type FlappyGameOverPacket,
+  type FlappySyncStatePacket,
   type FlappyBirdPacket,
 
   // Minesweeper Packets
@@ -106,6 +110,7 @@ export {
   // Client -> Server Packets
   type MSRevealTilePacket,
   type MSToggleFlagPacket,
+  type MSRequestSyncPacket,
   type MineSweeperClientPacket,
 
   // Server -> Client Packets
@@ -132,4 +137,3 @@ export {
   type FlappyBirdData,
   type FlappyPipeData,
 } from './common-type';
-

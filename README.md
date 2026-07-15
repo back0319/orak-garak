@@ -1,13 +1,14 @@
-# Phaser + React + TypeScript 게임 프로젝트
+# 다같이 오락가락 (Orak Garak)
 
-Phaser 3 게임 엔진과 React, TypeScript를 활용한 웹 게임 프로젝트입니다.
-pnpm workspace를 사용한 모노레포 구조로 구성되어 있습니다.
+React, Phaser, TypeScript로 만든 최대 4인용 웹 게임입니다. 정적 앱과
+멀티플레이 서버를 하나의 Cloudflare Worker로 배포하고, 방마다 하나의
+Durable Object가 권위 서버 상태를 관리합니다.
 
 ## 📋 사전 요구사항
 
 프로젝트를 실행하기 전에 다음 소프트웨어가 설치되어 있어야 합니다:
 
-- **Node.js** (v18 이상 권장)
+- **Node.js** (v24 이상)
   - [Node.js 공식 사이트](https://nodejs.org/)에서 다운로드
   - 설치 확인: `node --version`
 - **pnpm** (패키지 매니저)
@@ -21,8 +22,8 @@ pnpm workspace를 사용한 모노레포 구조로 구성되어 있습니다.
 ### 1. 저장소 클론
 
 ```bash
-git clone <저장소-URL>
-cd main-game
+git clone https://github.com/back0319/orak-garak.git
+cd orak-garak
 ```
 
 ### 2. 의존성 설치
@@ -39,10 +40,10 @@ pnpm install
 - Phaser 3.90
 - TypeScript 5.9
 - Vite 개발 서버
-- Socket.io Client
+- Cloudflare Vite 플러그인과 Wrangler
 - 기타 필요한 개발 도구
 
-### 3. FE 개발 서버 실행
+### 3. 로컬 통합 개발 서버 실행
 
 ```bash
 pnpm dev
@@ -61,20 +62,7 @@ VITE v7.2.4  ready in XXX ms
 
 브라우저를 열고 `http://localhost:5173/`로 접속하세요.
 
-### 4. BE 개발 서버 실행
-
-```bash
-pnpm -F @main-game/server dev
-```
-
-서버가 실행되면 터미널에 다음과 같은 메시지가 표시됩니다:
-
-```
-> tsx watch ./src/index.ts
-
-Game server starting...
-🚀 소켓 서버가 3000번 포트에서 대기 중...
-```
+Vite가 React 앱과 Cloudflare Worker/Durable Object 런타임을 함께 실행합니다.
 
 ## 📦 주요 명령어
 
@@ -83,6 +71,10 @@ Game server starting...
 | `pnpm install`      | 프로젝트 의존성 설치               |
 | `pnpm dev`          | 개발 서버 실행 (포트 5173)         |
 | `pnpm build`        | 모노레포 패키지 프로덕션 빌드 생성 |
+| `pnpm type-check`   | 공통·Worker TypeScript 검사        |
+| `pnpm test:worker`  | Workers Vitest 테스트 실행         |
+| `pnpm check:deploy` | 타입·테스트·프로덕션 빌드 게이트   |
+| `pnpm deploy`       | 빌드 후 Cloudflare Workers 배포    |
 | `pnpm preview`      | 빌드된 앱 미리보기                 |
 | `pnpm lint`         | ESLint로 코드 검사                 |
 | `pnpm format`       | Prettier로 코드 포맷팅             |
@@ -91,7 +83,7 @@ Game server starting...
 ## 🏗️ 프로젝트 구조
 
 ```
-main-game/
+orak-garak/
 ├── packages/
 │   ├── client/             # 프론트엔드 (React + Phaser)
 │   │   ├── src/
@@ -120,7 +112,8 @@ main-game/
 - **TypeScript 5.9** - 타입 안정성
 - **Phaser 3.90** - 2D 게임 엔진 (Canvas 렌더링)
 - **Vite 7.2** - 빌드 도구 및 개발 서버
-- **Socket.io Client** - 실시간 통신
+- **표준 WebSocket** - JSON 실시간 통신
+- **Cloudflare Workers + Durable Objects** - 방 단위 멀티플레이 서버
 - **NES.css** - 레트로 스타일 UI
 
 ### Shared
@@ -133,15 +126,20 @@ main-game/
 - **Prettier** - 코드 포맷터
 - **ESLint** - 코드 린터
 
-## 🔧 문제 해결
+## ☁️ Cloudflare 배포
 
-### 포트가 이미 사용 중인 경우
-
-다른 애플리케이션이 5173 포트를 사용 중이면 다음과 같이 다른 포트로 실행할 수 있습니다:
+최초 한 번 Cloudflare 계정을 연결한 뒤 배포합니다.
 
 ```bash
-pnpm dev -- --port 3000
+pnpm --filter ./packages/client exec wrangler login
+pnpm deploy
 ```
+
+배포 주소는 `orak-garak.<account>.workers.dev` 형식입니다. 정적 Assets와
+API/WebSocket이 같은 origin을 사용하므로 커스텀 도메인을 연결해도 클라이언트
+환경 변수 변경은 필요하지 않습니다.
+
+## 🔧 문제 해결
 
 ### 의존성 설치 오류
 

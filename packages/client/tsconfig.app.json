@@ -8,8 +8,8 @@
     "types": ["vite/client"],
     "skipLibCheck": true,
     "paths": {
-      "@main-game/common": ["../../common/src"],
-      "@main-game/common/*": ["../../common/src/*"]
+      "@main-game/common": ["../common/src/index.ts"],
+      "@main-game/common/*": ["../common/src/*"]
     },
 
     /* Bundler mode */

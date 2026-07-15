@@ -1,65 +1,72 @@
-import { createServer } from 'node:http';
-import { Server, Socket } from 'socket.io';
-import {
-  joinPlayerToGame,
-  handleClientPacket,
-  handleDisconnect,
-  handleConnection,
-} from './network/serverHandler';
-import { ServerPacket, SystemPacketType } from '../../common/src/packets';
+import type { GameRoom } from './network/gameRoom';
 
-console.log('Game server starting...');
+export { GameRoom } from './network/gameRoom';
 
-const httpServer = createServer();
-const io = new Server(httpServer, {
-  cors: {
-    origin: '*',  // 모든 도메인 허용 (개발/테스트용)
-    methods: ['GET', 'POST'],
+export interface Env {
+  GAME_ROOMS: DurableObjectNamespace<GameRoom>;
+}
+
+const ROOM_ID_PATTERN = /^[a-z0-9]{10}$/;
+const ROOM_ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyz';
+
+function createRoomId(): string {
+  const bytes = new Uint8Array(10);
+  crypto.getRandomValues(bytes);
+  return Array.from(
+    bytes,
+    (value) => ROOM_ALPHABET[value % ROOM_ALPHABET.length],
+  ).join('');
+}
+
+export default {
+  async fetch(request, env): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (request.method === 'GET' && url.pathname === '/api/health') {
+      return Response.json({
+        ok: true,
+        service: 'orak-garak',
+        runtime: 'cloudflare-workers',
+      });
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/rooms') {
+      return Response.json({ roomId: createRoomId() }, { status: 201 });
+    }
+
+    const match = url.pathname.match(/^\/ws\/rooms\/([^/]+)$/);
+    if (request.method === 'GET' && match) {
+      const roomId = match[1];
+      if (!ROOM_ID_PATTERN.test(roomId)) {
+        return Response.json({ error: 'invalid_room_id' }, { status: 400 });
+      }
+      if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+        return Response.json(
+          { error: 'websocket_upgrade_required' },
+          { status: 426 },
+        );
+      }
+
+      const origin = request.headers.get('Origin');
+      if (origin) {
+        try {
+          if (new URL(origin).host !== url.host) {
+            return Response.json(
+              { error: 'origin_not_allowed' },
+              { status: 403 },
+            );
+          }
+        } catch {
+          return Response.json(
+            { error: 'origin_not_allowed' },
+            { status: 403 },
+          );
+        }
+      }
+
+      return env.GAME_ROOMS.getByName(roomId).fetch(request);
+    }
+
+    return new Response('Not found', { status: 404 });
   },
-  transports: ['websocket'], // 서버도 웹소켓만 허용하도록 일치시킴
-});
-
-io.on('connection', (socket: Socket) => {
-  handleConnection(socket);
-
-  socket.onAny((eventName, data) => {
-    // console.log(`Event: ${eventName}`, data);
-    const packet = { type: eventName, ...data } as ServerPacket;
-    handleClientPacket(io, socket, packet);
-  });
-
-  socket.on('disconnect', () => {
-    console.log(`접속 종료: ${socket.id}`);
-    handleDisconnect(socket.id);
-  });
-});
-
-httpServer.listen(3000, '0.0.0.0', () => {
-  console.log('🚀 소켓 서버가 3000번 포트에서 대기 중...');
-});
-
-// 프로세스 종료 방지 및 에러 로그 기록
-process.on('uncaughtException', (err) => {
-  console.error('❌ Uncaught Exception:', err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-process.on('exit', (code) => {
-  console.log(`[Server] Process exiting with code: ${code}`);
-  if (code !== 0) {
-    console.trace('Exit Trace:');
-  }
-});
-
-process.on('SIGINT', () => {
-  console.log('[Server] Received SIGINT (Ctrl+C)');
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  console.log('[Server] Received SIGTERM');
-  process.exit(0);
-});
+} satisfies ExportedHandler<Env>;

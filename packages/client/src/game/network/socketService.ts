@@ -1,6 +1,5 @@
-import type { Socket } from 'socket.io-client';
 import { MockSocket } from './MockSocket';
-import { socketManager } from '../../network/socket';
+import { socketManager, type GameClientSocket } from '../../network/socket';
 
 /**
  * 환경 변수 기반 소켓 팩토리
@@ -15,7 +14,7 @@ let mockSocketInstance: MockSocket | null = null;
  * 소켓 인스턴스 가져오기 (싱글톤)
  * 실제 서버 모드에서는 socketManager의 소켓을 사용
  */
-export function getSocket(): Socket | MockSocket {
+export function getSocket(): GameClientSocket | MockSocket {
   if (USE_MOCK) {
     if (!mockSocketInstance) {
       console.log('[SocketService] Mock 모드로 실행 중');
@@ -24,11 +23,7 @@ export function getSocket(): Socket | MockSocket {
     return mockSocketInstance;
   } else {
     // 실제 서버 모드: socketManager의 소켓 사용 (방에 참가한 소켓)
-    const socket = socketManager.getSocket();
-    if (!socket) {
-      throw new Error('[SocketService] socketManager에 소켓이 없습니다. 먼저 연결해주세요.');
-    }
-    return socket;
+    return socketManager.getSocket();
   }
 }
 

@@ -1,29 +1,34 @@
 import {
   SystemPacketType,
-  RoomUpdatePacket,
+  type RoomUpdatePacket,
   RoomUpdateType,
-  ServerPacket,
-  GameConfigUpdatePacket,
-  ReturnToTheLobbyPacket,
-} from '../../../common/src/packets';
-import {
-  GameStatus,
+  type ServerPacket,
+  type GameConfigUpdatePacket,
+  type ReturnToTheLobbyPacket,
+  type GameStatus,
   PLAYER_COLORS,
-  PlayerData,
-  PlayerState,
-} from '../../../common/src/common-type';
-
-import {
+  type PlayerData,
+  type PlayerState,
   GameType,
-  GameConfig,
-  AppleGameRenderConfig,
+  type GameConfig,
+  type AppleGameRenderConfig,
   sanitizeForApple,
-} from '../../../common/src/config';
-import { Server, Socket } from 'socket.io';
+  getDefaultConfig,
+} from '@main-game/common';
+import type { GameSocket, GameTransport } from '../network/transport';
 import { GameInstance } from './instances/GameInstance';
 import { AppleGameInstance } from './instances/AppleGameInstance';
 import { FlappyBirdInstance } from './instances/FlappyBirdInstance';
 import { MineSweeperInstance } from './instances/MineSweeperInstance';
+
+export interface PersistedGameSession {
+  version: 1;
+  selectedGameType: GameType;
+  gameConfigs: Array<[GameType, GameConfig]>;
+  status: GameStatus;
+  players: PlayerState[];
+  activeGame: unknown | null;
+}
 
 export class GameSession {
   // selected game in this session (lobby choice)
@@ -42,7 +47,7 @@ export class GameSession {
   private availableColors: Set<string> = new Set(PLAYER_COLORS);
 
   constructor(
-    public io: Server,
+    public io: GameTransport,
     public roomId: string,
   ) {}
 
@@ -113,8 +118,10 @@ export class GameSession {
     return -1;
   }
 
-  public updateRemainingPlayers(id: string) {
-    // Send JOIN to existing players (excluding the new player)
+  public updateRemainingPlayers(
+    id: string,
+    updateType: RoomUpdateType = RoomUpdateType.PLAYER_QUIT,
+  ) {
     for (const [playerId] of this.players) {
       if (playerId === id) continue; // 새로 접속한 플레이어 제외
 
@@ -124,7 +131,7 @@ export class GameSession {
       const roomUpdatePacket2Other: RoomUpdatePacket = {
         type: SystemPacketType.ROOM_UPDATE,
         players: this.getPlayers(),
-        updateType: RoomUpdateType.PLAYER_QUIT,
+        updateType,
         yourIndex: this.getIndex(playerId),
         roomId: this.roomId,
       };
@@ -229,8 +236,11 @@ export class GameSession {
     // todo 이거 config 값을 생성할 때부터
     this.games = this.createGameInstance(this.selectedGameType);
 
-    const config = this.gameConfigs.get(this.selectedGameType);
-    this.games.initialize(config as GameConfig);
+    const config =
+      this.gameConfigs.get(this.selectedGameType) ??
+      getDefaultConfig(this.selectedGameType);
+    this.gameConfigs.set(this.selectedGameType, config);
+    this.games.initialize(config);
 
     // READY_SCENE 브로드캐스트
     this.broadcastPacket({
@@ -318,7 +328,7 @@ export class GameSession {
   }
 
   // ========== PACKET ROUTING ==========
-  public handleGamePacket(socket: Socket, packet: any): void {
+  public handleGamePacket(socket: GameSocket, packet: any): void {
     if (!this.games || this.status !== 'playing') {
       console.log(
         `[GameSession] handleGamePacket 무시됨 - games: ${!!this.games}, status: ${this.status}`,
@@ -327,9 +337,6 @@ export class GameSession {
     }
 
     const playerIndex = this.getIndex(socket.id);
-    console.log(
-      `[GameSession] handleGamePacket 전달 - type: ${packet.type}, playerIndex: ${playerIndex}`,
-    );
     this.games.handlePacket(socket, playerIndex, packet);
   }
 
@@ -339,5 +346,52 @@ export class GameSession {
 
     // Broadcast callback
     this.io.to(this.roomId).emit(packet.type, payload);
+  }
+
+  public handleAlarm(): void {
+    this.games?.handleAlarm?.();
+  }
+
+  public serialize(): PersistedGameSession {
+    return {
+      version: 1,
+      selectedGameType: this.selectedGameType,
+      gameConfigs: Array.from(this.gameConfigs.entries()),
+      status: this.status,
+      players: Array.from(this.players.values()),
+      activeGame: this.games?.serialize() ?? null,
+    };
+  }
+
+  public restore(snapshot: PersistedGameSession): { interrupted: boolean } {
+    this.selectedGameType = snapshot.selectedGameType;
+    this.gameConfigs = new Map(snapshot.gameConfigs);
+    this.players = new Map(
+      snapshot.players.map((player) => [player.id, player]),
+    );
+    this.availableColors = new Set(
+      PLAYER_COLORS.filter(
+        (color) => !snapshot.players.some((player) => player.color === color),
+      ),
+    );
+    this.status = snapshot.status;
+
+    if (snapshot.status !== 'playing') {
+      return { interrupted: false };
+    }
+
+    if (snapshot.selectedGameType === GameType.FLAPPY_BIRD) {
+      this.status = 'waiting';
+      return { interrupted: true };
+    }
+
+    if (!snapshot.activeGame) {
+      this.status = 'waiting';
+      return { interrupted: true };
+    }
+
+    this.games = this.createGameInstance(snapshot.selectedGameType);
+    this.games.restore(snapshot.activeGame);
+    return { interrupted: false };
   }
 }

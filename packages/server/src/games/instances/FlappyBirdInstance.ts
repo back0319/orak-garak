@@ -4,20 +4,18 @@ import {
   FlappyBirdGamePreset,
   resolveFlappyBirdPreset,
   FLAPPY_PHYSICS,
-} from '../../../../common/src/config';
+} from '@main-game/common';
 import {
   FlappyBirdPacketType,
   FlappyScoreUpdatePacket,
   FlappyGameOverPacket,
   FlappyWorldStatePacket,
   FlappySyncStatePacket,
-} from '../../../../common/src/packets';
-import {
-  FlappyPipeData,
-  FlappyBirdData,
-} from '../../../../common/src/common-type';
+} from '@main-game/common';
+import { FlappyPipeData, FlappyBirdData } from '@main-game/common';
 import { GameSession } from '../gameSession';
-import { Socket } from 'socket.io';
+import type { GameSocket } from '../../network/transport';
+import { FixedStepClock } from './fixedStepClock';
 
 // 상수 추출
 const {
@@ -79,9 +77,15 @@ export class FlappyBirdInstance implements GameInstance {
   private connectAll: boolean = false;
 
   // 루프 관리
-  private updateInterval: NodeJS.Timeout | null = null;
+  private updateInterval: ReturnType<typeof setInterval> | null = null;
   private readonly PHYSICS_FPS = 60;
-  private readonly NETWORK_TICK_RATE = 60;
+  private readonly NETWORK_TICK_RATE = 20;
+  private readonly PHYSICS_SUBSTEPS = 2;
+  private readonly MAX_CATCH_UP_STEPS = 6;
+  private readonly loopClock = new FixedStepClock(
+    1000 / this.PHYSICS_FPS,
+    this.MAX_CATCH_UP_STEPS,
+  );
 
   private session: GameSession;
 
@@ -148,10 +152,11 @@ export class FlappyBirdInstance implements GameInstance {
 
     this.isRunning = true;
     this.session.status = 'playing';
+    this.loopClock.reset(Date.now());
 
     this.updateInterval = setInterval(
-      () => this.physicsUpdate(),
-      1000 / this.PHYSICS_FPS,
+      () => this.runScheduledUpdate(Date.now()),
+      1000 / this.NETWORK_TICK_RATE,
     );
 
     console.log('[FlappyBirdInstance] 게임 시작');
@@ -183,7 +188,17 @@ export class FlappyBirdInstance implements GameInstance {
     console.log('[FlappyBirdInstance] 정리 완료');
   }
 
-  handlePacket(socket: Socket, playerIndex: number, packet: any): void {
+  serialize(): unknown {
+    // A running physics loop is intentionally not persisted. The room restores
+    // to the lobby after an isolate restart instead of resuming a divergent sim.
+    return null;
+  }
+
+  restore(_snapshot: unknown): void {
+    this.isRunning = false;
+  }
+
+  handlePacket(socket: GameSocket, playerIndex: number, packet: any): void {
     switch (packet.type) {
       case FlappyBirdPacketType.FLAPPY_JUMP:
         this.handleJump(playerIndex);
@@ -198,7 +213,7 @@ export class FlappyBirdInstance implements GameInstance {
    * 클라이언트 씬 로딩 완료 후 동기화 요청 처리
    * 현재 게임 상태를 해당 클라이언트에게 전송
    */
-  private handleSyncRequest(socket: Socket): void {
+  private handleSyncRequest(socket: GameSocket): void {
     // 현재 새 위치 정보
     const birds: FlappyBirdData[] = this.birds.map((bird) => ({
       x: bird.position.x,
@@ -239,7 +254,8 @@ export class FlappyBirdInstance implements GameInstance {
     };
 
     // 요청한 클라이언트에게만 전송
-    socket.emit('packet', syncPacket);
+    const { type, ...payload } = syncPacket;
+    socket.emit(type, payload);
 
     console.log(
       `[FlappyBirdInstance] 동기화 응답 전송 (gameOver: ${this.isGameOverState}, score: ${this.score})`,
@@ -368,6 +384,19 @@ export class FlappyBirdInstance implements GameInstance {
 
   // ========== 게임 루프 ==========
 
+  private runScheduledUpdate(nowMs: number): void {
+    const { steps } = this.loopClock.advance(nowMs);
+
+    for (let step = 0; step < steps; step++) {
+      this.physicsUpdate();
+      if (!this.isRunning) return;
+    }
+
+    // 네트워크 전송은 타이머 콜백당 한 번으로 제한한다. 런타임이 잠시
+    // 밀려 여러 물리 스텝을 따라잡아도 오래된 스냅샷을 연속 전송하지 않는다.
+    if (steps > 0) this.broadcastWorldState();
+  }
+
   private physicsUpdate(): void {
     this.physicsTick++;
 
@@ -423,17 +452,13 @@ export class FlappyBirdInstance implements GameInstance {
       }
     }
 
-    // 5. 물리 서브스테핑 (바닥 뚫림 방지)
-    const subSteps = 5;
-    const stepTime = 1000 / 60 / subSteps;
-    for (let s = 0; s < subSteps; s++) {
+    // 5. 충돌 안정성을 위한 최소 서브스테핑. 기존 5회에서 2회로 줄여
+    // 초당 Matter.js 업데이트를 300회에서 120회로 낮춘다.
+    const stepTime = 1000 / this.PHYSICS_FPS / this.PHYSICS_SUBSTEPS;
+    for (let s = 0; s < this.PHYSICS_SUBSTEPS; s++) {
       Matter.Engine.update(this.engine, stepTime);
       this.checkCollisions();
-    }
-
-    // 6. 네트워크 브로드캐스트 (60Hz)
-    if (this.physicsTick % (this.PHYSICS_FPS / this.NETWORK_TICK_RATE) === 0) {
-      this.broadcastWorldState();
+      if (!this.isRunning) return;
     }
   }
 
@@ -623,8 +648,6 @@ export class FlappyBirdInstance implements GameInstance {
 
     // 패킷 전송 후 게임 정지 (이 순서가 중요!)
     this.session.broadcastPacket(gameOverPacket);
-    this.session.stopGame();
-
     console.log(
       `[FlappyBirdInstance] 게임 오버: ${reason} (Player ${playerIndex}), birds: ${birds.length}, cameraX: ${cameraX}`,
     );

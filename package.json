@@ -5,7 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm --filter ./packages/client dev",
-    "build": "pnpm --filter ./packages/common build && pnpm --filter ./packages/client build && node -e \"const fs = require('fs'); if (fs.existsSync('dist')) fs.rmSync('dist', { recursive: true, force: true }); fs.cpSync('packages/client/dist', 'dist', { recursive: true });\"",
+    "build": "pnpm --filter ./packages/common build && pnpm --filter ./packages/client build",
+    "deploy": "pnpm build && pnpm deploy:built",
+    "deploy:built": "pnpm --filter ./packages/client exec wrangler deploy --config dist/orak_garak/wrangler.json",
+    "cf-typegen": "pnpm --filter ./packages/client exec wrangler types --config ../../wrangler.jsonc",
+    "type-check": "pnpm --filter ./packages/common type-check && pnpm --filter ./packages/common build && pnpm --filter ./packages/server type-check",
+    "test:worker": "pnpm --filter ./packages/server test",
+    "check:deploy": "pnpm type-check && pnpm test:worker && pnpm build",
     "preview": "pnpm --filter ./packages/client preview",
     "lint": "pnpm --filter ./packages/client lint",
     "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,css,scss,md}\"",
@@ -20,6 +26,6 @@
   },
   "packageManager": "pnpm@9.12.3",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.16.0"
   }
 }
