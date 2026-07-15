@@ -253,6 +253,23 @@ export const handleServerPacket = (packet: ServerPacket) => {
         packet.tick,
         packet.cameraX,
         packet.lastProcessedInputSeqs,
+        packet.roundId,
+        packet.physicsSeed,
+        packet.lastFlapTicks,
+      );
+      break;
+    }
+
+    case FlappyBirdPacketType.FLAPPY_INPUT_APPLIED: {
+      window.dispatchEvent(
+        new CustomEvent('flappy:input_applied', { detail: packet }),
+      );
+      break;
+    }
+
+    case FlappyBirdPacketType.FLAPPY_CLOCK_PONG: {
+      window.dispatchEvent(
+        new CustomEvent('flappy:clock_pong', { detail: packet }),
       );
       break;
     }
@@ -298,6 +315,9 @@ export const handleServerPacket = (packet: ServerPacket) => {
         packet.tick,
         packet.cameraX,
         packet.lastProcessedInputSeqs,
+        packet.roundId,
+        packet.physicsSeed,
+        packet.lastFlapTicks,
       );
       store.setFlappyScore(packet.score);
 

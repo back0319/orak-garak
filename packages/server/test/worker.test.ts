@@ -1,12 +1,18 @@
 import { env, exports } from 'cloudflare:workers';
 import { evictDurableObject, runDurableObjectAlarm } from 'cloudflare:test';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   GameType,
   FlappyBirdPacketType,
   RoomUpdateType,
   SystemPacketType,
+  applyDeterministicFlappyJump,
+  createFlappyPhysicsRuntime,
+  destroyFlappyPhysicsRuntime,
   getDefaultConfig,
+  resolveFlappyBirdPreset,
+  snapshotFlappyBirds,
+  stepFlappyBirdPhysics,
   type GameConfig,
   type FlappyBirdGamePreset,
 } from '@main-game/common';
@@ -273,162 +279,200 @@ describe('Flappy rendering interpolation', () => {
 });
 
 describe('Flappy client render simulation', () => {
-  const bird = (overrides: Partial<BirdPosition> = {}): BirdPosition => ({
-    playerId: '0',
-    x: 100,
-    y: 200,
-    velocityX: 4,
-    velocityY: 0,
-    angle: 0,
-    ...overrides,
-  });
+  const preset = getDefaultConfig(GameType.FLAPPY_BIRD) as FlappyBirdGamePreset;
+  const config = resolveFlappyBirdPreset(preset);
+  const seed = 0x5eed1234;
+  const roundId = 'round-test';
 
-  it('advances at render frequency between server snapshots', () => {
-    const simulation = new FlappyRenderSimulation();
-    simulation.reset([bird()], 0);
+  function initialBirds(playerCount = 1): BirdPosition[] {
+    const runtime = createFlappyPhysicsRuntime(playerCount, config.connectAll);
+    const birds = snapshotFlappyBirds(runtime.birds).map((bird, index) => ({
+      playerId: String(index),
+      x: bird.x,
+      y: bird.y,
+      velocityX: bird.vx,
+      velocityY: bird.vy,
+      angle: bird.angle,
+    }));
+    destroyFlappyPhysicsRuntime(runtime);
+    return birds;
+  }
 
-    const first = simulation.update(1000 / 60)[0];
-    expect(first.x).toBeCloseTo(104, 4);
-    expect(first.y).toBeGreaterThan(200);
-    const firstY = first.y;
+  function initialize(simulation: FlappyRenderSimulation): BirdPosition[] {
+    const birds = initialBirds();
+    simulation.applySnapshot({
+      tick: 0,
+      birds,
+      lastProcessedInputSeqs: [0],
+      lastFlapTicks: [0],
+      localPlayerIndex: 0,
+      roundId,
+      physicsSeed: seed,
+      config,
+      receivedAt: 0,
+      force: true,
+    });
+    return birds;
+  }
 
-    const second = simulation.update(1000 / 60)[0];
-    expect(second.x).toBeCloseTo(108, 4);
-    expect(second.y).toBeGreaterThan(firstY);
-  });
+  it('keeps shared Matter physics deterministic for 600 ticks', () => {
+    const left = createFlappyPhysicsRuntime(4, true);
+    const right = createFlappyPhysicsRuntime(4, true);
+    const leftFlaps = [0, 0, 0, 0];
+    const rightFlaps = [0, 0, 0, 0];
+    const sequences = [0, 0, 0, 0];
 
-  it('samples motion on every high-refresh render frame', () => {
-    const simulation = new FlappyRenderSimulation();
-    simulation.reset([bird({ velocityY: -8 })], 0);
-
-    const firstY = simulation.update(1000 / 120, 1000 / 120)[0].y;
-    const secondY = simulation.update(1000 / 120, 1000 / 60)[0].y;
-    const thirdY = simulation.update(1000 / 120, 1000 / 40)[0].y;
-
-    expect(firstY).toBeLessThan(200);
-    expect(secondY).toBeLessThan(firstY);
-    expect(thirdY).toBeLessThan(secondY);
-  });
-
-  it('does not freeze when a 20Hz snapshot is briefly delayed', () => {
-    const simulation = new FlappyRenderSimulation();
-    simulation.reset([bird()], 0);
-    simulation.applySnapshot(0, [bird()], [0], 0, 0, true);
-
-    const at100ms = simulation.update(100, 100)[0].x;
-    const at150ms = simulation.update(50, 150)[0].x;
-
-    expect(at100ms).toBeGreaterThan(100);
-    expect(at150ms).toBeGreaterThan(at100ms);
-  });
-
-  it('applies the local jump before the next server packet arrives', () => {
-    const simulation = new FlappyRenderSimulation();
-    simulation.reset([bird()], 0);
-    simulation.applyLocalJump(0, 1, -10);
-
-    const next = simulation.update(1000 / 60)[0];
-    expect(next.y).toBeLessThan(200);
-    expect(next.velocityY).toBeLessThan(0);
-  });
-
-  it('starts a local jump from the currently displayed sub-frame position', () => {
-    const simulation = new FlappyRenderSimulation();
-    simulation.reset([bird({ velocityY: 6 })], 0);
-
-    const displayedBeforeJump = simulation.update(1000 / 120)[0].y;
-    simulation.applyLocalJump(0, 1, -10);
-
-    expect(simulation.getBirds()[0].y).toBeCloseTo(displayedBeforeJump, 6);
-    expect(simulation.update(1000 / 120)[0].y).toBeLessThan(
-      displayedBeforeJump,
-    );
-  });
-
-  it('reconciles small server errors and snaps impossible divergence', () => {
-    const simulation = new FlappyRenderSimulation();
-    simulation.reset([bird()], 0);
-    simulation.update(1000 / 60);
-
-    simulation.applySnapshot(3, [bird({ x: 110, y: 205 })], [0], 0, 50);
-    expect(simulation.getBirds()[0].x).not.toBe(110);
-
-    simulation.applySnapshot(6, [bird({ x: 500, y: 500 })], [0], 0, 100);
-    expect(simulation.getBirds()[0].x).toBe(500);
-    expect(simulation.getBirds()[0].y).toBe(500);
-  });
-
-  it('does not let a stale ack cancel a newer local jump', () => {
-    const simulation = new FlappyRenderSimulation();
-    simulation.reset([bird()], 0);
-    simulation.applyLocalJump(0, 2, -10);
-    simulation.update(1000 / 60, 16.67);
-
-    simulation.applySnapshot(3, [bird({ y: 202, velocityY: 1 })], [1], 0, 50);
-    const afterStaleAck = simulation.update(1000 / 60, 66.67)[0];
-    expect(afterStaleAck.velocityY).toBeLessThan(0);
-    expect(afterStaleAck.y).toBeLessThan(200);
-  });
-
-  it('smoothly converges once the latest local input is acknowledged', () => {
-    const acknowledged = new FlappyRenderSimulation();
-    const pending = new FlappyRenderSimulation();
-    for (const simulation of [acknowledged, pending]) {
-      simulation.reset([bird()], 0);
-      simulation.applyLocalJump(0, 1, -10);
-      simulation.update(1000 / 60, 16.67);
+    for (let tick = 1; tick <= 600; tick += 1) {
+      for (let playerIndex = 0; playerIndex < 4; playerIndex += 1) {
+        if (tick % (37 + playerIndex * 5) !== 0) continue;
+        const inputSeq = ++sequences[playerIndex];
+        applyDeterministicFlappyJump(
+          left.birds,
+          playerIndex,
+          inputSeq,
+          seed,
+          config,
+        );
+        applyDeterministicFlappyJump(
+          right.birds,
+          playerIndex,
+          inputSeq,
+          seed,
+          config,
+        );
+        leftFlaps[playerIndex] = tick - 1;
+        rightFlaps[playerIndex] = tick - 1;
+      }
+      stepFlappyBirdPhysics({
+        runtime: left,
+        tick,
+        lastFlapTicks: leftFlaps,
+        config: { ...config, connectAll: true },
+      });
+      stepFlappyBirdPhysics({
+        runtime: right,
+        tick,
+        lastFlapTicks: rightFlaps,
+        config: { ...config, connectAll: true },
+      });
     }
 
-    acknowledged.applySnapshot(
-      3,
-      [bird({ y: 160, velocityY: -8 })],
-      [1],
-      0,
-      50,
-    );
-    pending.applySnapshot(3, [bird({ y: 160, velocityY: -8 })], [0], 0, 50);
-    const corrected = acknowledged.update(1000 / 60, 66.67)[0];
-    const unacknowledged = pending.update(1000 / 60, 66.67)[0];
-    const authorityYAfterFrame = 160 - 8 + 0.5 * 0.75;
-
-    expect(corrected.y).not.toBe(authorityYAfterFrame);
-    expect(Math.abs(corrected.y - authorityYAfterFrame)).toBeLessThan(
-      Math.abs(unacknowledged.y - authorityYAfterFrame),
-    );
+    const leftBirds = snapshotFlappyBirds(left.birds);
+    const rightBirds = snapshotFlappyBirds(right.birds);
+    for (let index = 0; index < leftBirds.length; index += 1) {
+      for (const field of ['x', 'y', 'vx', 'vy', 'angle'] as const) {
+        expect(
+          Math.abs(leftBirds[index][field] - rightBirds[index][field]),
+        ).toBeLessThan(0.01);
+      }
+    }
+    destroyFlappyPhysicsRuntime(left);
+    destroyFlappyPhysicsRuntime(right);
   });
 
-  it('predicts remote birds to the minimum-delay clock without a display buffer', () => {
+  it('keeps y unchanged on the input frame and rises on the next RAF', () => {
     const simulation = new FlappyRenderSimulation();
-    simulation.reset([bird()], 0);
-    simulation.applySnapshot(0, [bird()], [0], -1, 1_000, true);
-    simulation.applySnapshot(3, [bird({ x: 112 })], [0], -1, 1_070, true);
+    initialize(simulation);
+    const before = simulation.getBirds()[0].y;
 
-    expect(simulation.getBirds()[0].x).toBeGreaterThan(112);
-    expect(simulation.getBirds()[0].x).toBeLessThanOrEqual(136);
+    simulation.applyLocalJump(0, 1);
+
+    expect(simulation.getBirds()[0].y).toBe(before);
+    expect(simulation.update(1000 / 60, 1000 / 60)[0].y).toBeLessThan(before);
   });
 
-  it('hard resynchronizes instead of catching up an entire long frame stall', () => {
+  it('does not apply a locally predicted jump twice when its ack arrives early', () => {
     const simulation = new FlappyRenderSimulation();
-    simulation.reset([bird()], 0);
+    const birds = initialize(simulation);
+    const authority = createFlappyPhysicsRuntime(1, false, [
+      {
+        x: birds[0].x,
+        y: birds[0].y,
+        vx: birds[0].velocityX,
+        vy: birds[0].velocityY,
+        angle: birds[0].angle,
+      },
+    ]);
+
+    simulation.applyLocalJump(0, 1);
+    simulation.applyInputApplied({
+      roundId,
+      playerIndex: 0,
+      inputSeq: 1,
+      applyTick: 1,
+    });
+    const predicted = simulation.update(1000 / 60, 1000 / 60)[0];
+
+    applyDeterministicFlappyJump(authority.birds, 0, 1, seed, config);
+    stepFlappyBirdPhysics({
+      runtime: authority,
+      tick: 1,
+      lastFlapTicks: [0],
+      config,
+    });
+    const expected = snapshotFlappyBirds(authority.birds)[0];
+    expect(predicted.y).toBeCloseTo(expected.y, 2);
+    expect(predicted.velocityY).toBeCloseTo(expected.vy, 2);
+    destroyFlappyPhysicsRuntime(authority);
+  });
+
+  it('stays within 1px of authority half a second after a jump', () => {
+    const simulation = new FlappyRenderSimulation();
+    const birds = initialize(simulation);
+    const authority = createFlappyPhysicsRuntime(1, false, [
+      {
+        x: birds[0].x,
+        y: birds[0].y,
+        vx: birds[0].velocityX,
+        vy: birds[0].velocityY,
+        angle: birds[0].angle,
+      },
+    ]);
+    simulation.applyLocalJump(0, 1);
+    applyDeterministicFlappyJump(authority.birds, 0, 1, seed, config);
+
+    for (let tick = 1; tick <= 30; tick += 1) {
+      simulation.update(1000 / 60, (tick * 1000) / 60);
+      stepFlappyBirdPhysics({
+        runtime: authority,
+        tick,
+        lastFlapTicks: [0],
+        config,
+      });
+    }
+    const predicted = simulation.getBirds()[0];
+    const expected = snapshotFlappyBirds(authority.birds)[0];
+    expect(Math.abs(predicted.y - expected.y)).toBeLessThan(1);
+    destroyFlappyPhysicsRuntime(authority);
+  });
+
+  it('hard resynchronizes after a long inactive frame', () => {
+    const simulation = new FlappyRenderSimulation();
+    const birds = initialize(simulation);
     const afterStall = simulation.update(300, 300)[0];
 
-    expect(afterStall.x).toBe(100);
-    expect(afterStall.y).toBe(200);
+    expect(afterStall.x).toBe(birds[0].x);
+    expect(afterStall.y).toBe(birds[0].y);
   });
 });
 
 describe('Flappy server input sequencing', () => {
   it('ignores duplicate and reversed inputs and keeps player acks isolated', () => {
     const emitted: Array<{ event: string; data: unknown }> = [];
+    const broadcasts: Array<{ event: string; data: unknown }> = [];
     const socket: GameSocket = {
       id: 'p0',
       emit: (event, data) => emitted.push({ event, data }),
-      to: () => ({ emit: () => undefined }),
+      to: () => ({
+        emit: (event, data) => broadcasts.push({ event, data }),
+      }),
       disconnect: () => undefined,
     };
     const transport: GameTransport = {
       sockets: { sockets: new Map([['p0', socket]]) },
-      to: () => ({ emit: () => undefined }),
+      to: () => ({
+        emit: (event, data) => broadcasts.push({ event, data }),
+      }),
       scheduleAlarm: async () => undefined,
       clearAlarm: async () => undefined,
     };
@@ -450,7 +494,13 @@ describe('Flappy server input sequencing', () => {
     const firstSync = emitted.at(-1)!.data as {
       lastProcessedInputSeqs: number[];
       birds: Array<{ vy: number }>;
+      roundId: string;
     };
+
+    expect(broadcasts.at(-1)).toMatchObject({
+      event: FlappyBirdPacketType.FLAPPY_INPUT_APPLIED,
+      data: { playerIndex: 0, inputSeq: 2, applyTick: 1 },
+    });
 
     game.handlePacket(socket, 0, {
       type: FlappyBirdPacketType.FLAPPY_JUMP,
@@ -459,6 +509,11 @@ describe('Flappy server input sequencing', () => {
     game.handlePacket(socket, 0, {
       type: FlappyBirdPacketType.FLAPPY_JUMP,
       inputSeq: 1,
+    });
+    game.handlePacket(socket, 0, {
+      type: FlappyBirdPacketType.FLAPPY_JUMP,
+      inputSeq: 3,
+      roundId: 'previous-round',
     });
     game.handlePacket(socket, 0, {
       type: FlappyBirdPacketType.FLAPPY_REQUEST_SYNC,
@@ -471,7 +526,65 @@ describe('Flappy server input sequencing', () => {
     expect(firstSync.lastProcessedInputSeqs).toEqual([2, 0]);
     expect(duplicateSync.lastProcessedInputSeqs).toEqual([2, 0]);
     expect(duplicateSync.birds[0].vy).toBe(firstSync.birds[0].vy);
+
+    game.handlePacket(socket, 0, {
+      type: FlappyBirdPacketType.FLAPPY_CLOCK_PING,
+      clientSentAt: 1234,
+      roundId: firstSync.roundId,
+    });
+    expect(emitted.at(-1)).toMatchObject({
+      event: FlappyBirdPacketType.FLAPPY_CLOCK_PONG,
+      data: {
+        clientSentAt: 1234,
+        roundId: firstSync.roundId,
+        serverTick: 0,
+      },
+    });
     game.destroy();
+  });
+
+  it('runs physics near 60Hz while broadcasting no more than 20 snapshots', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const broadcasts: Array<{ event: string; data: unknown }> = [];
+    const emitted: Array<{ event: string; data: unknown }> = [];
+    const socket: GameSocket = {
+      id: 'p0',
+      emit: (event, data) => emitted.push({ event, data }),
+      to: () => ({ emit: () => undefined }),
+      disconnect: () => undefined,
+    };
+    const transport: GameTransport = {
+      sockets: { sockets: new Map([['p0', socket]]) },
+      to: () => ({
+        emit: (event, data) => broadcasts.push({ event, data }),
+      }),
+      scheduleAlarm: async () => undefined,
+      clearAlarm: async () => undefined,
+    };
+    const session = new GameSession(transport, 'abcdefghij');
+    session.addPlayer('p0', '첫째');
+    const game = new FlappyBirdInstance(session);
+    game.initialize(
+      getDefaultConfig(GameType.FLAPPY_BIRD) as FlappyBirdGamePreset,
+    );
+    game.start();
+
+    vi.advanceTimersByTime(1_000);
+    game.handlePacket(socket, 0, {
+      type: FlappyBirdPacketType.FLAPPY_REQUEST_SYNC,
+    });
+    const sync = emitted.at(-1)!.data as { tick: number };
+    const snapshots = broadcasts.filter(
+      (packet) => packet.event === FlappyBirdPacketType.FLAPPY_WORLD_STATE,
+    );
+
+    expect(sync.tick).toBeGreaterThanOrEqual(59);
+    expect(sync.tick).toBeLessThanOrEqual(60);
+    expect(snapshots.length).toBeGreaterThanOrEqual(19);
+    expect(snapshots.length).toBeLessThanOrEqual(20);
+    game.destroy();
+    vi.useRealTimers();
   });
 });
 

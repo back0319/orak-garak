@@ -27,13 +27,13 @@ import type {
   FlappyBirdGamePreset,
   ResolvedFlappyBirdConfig,
 } from '../../../../../common/src/config';
-import {
-  FLAPPY_PHYSICS,
-  resolveFlappyBirdPreset,
-} from '../../../../../common/src/config';
+import { resolveFlappyBirdPreset } from '../../../../../common/src/config';
 import {
   FlappyBirdPacketType,
   type FlappyJumpPacket,
+  type FlappyClockPingPacket,
+  type FlappyInputAppliedPacket,
+  type FlappyClockPongPacket,
   type FlappyRequestSyncPacket,
 } from '../../../../../common/src/packets';
 import PipeManager from './PipeManager';
@@ -78,6 +78,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
   private targetPositions: BirdPosition[] = [];
   private renderSimulation = new FlappyRenderSimulation();
   private nextInputSeq = 1;
+  private clockSyncTimer?: number;
 
   // 바닥 (무한 스크롤용)
   private groundTile!: Phaser.GameObjects.TileSprite;
@@ -164,6 +165,10 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     this.isGameOver = false;
     this.pendingGameOverFromSync = false;
     this.nextInputSeq = 1;
+    if (this.clockSyncTimer !== undefined) {
+      window.clearInterval(this.clockSyncTimer);
+      this.clockSyncTimer = undefined;
+    }
 
     this.editorCreate();
 
@@ -258,48 +263,57 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       const packet = (event as CustomEvent).detail;
       console.log('[FlappyBirdsScene] flappy:sync_state 이벤트 수신');
 
-      // 새 위치 적용
-      if (packet.birds && packet.birds.length > 0) {
-        this.targetPositions = packet.birds.map(
-          (
-            bird: {
-              x: number;
-              y: number;
-              vx: number;
-              vy: number;
-              angle: number;
-            },
-            index: number,
-          ) => ({
-            playerId: String(index) as PlayerId,
-            x: bird.x,
-            y: bird.y,
-            velocityX: bird.vx,
-            velocityY: bird.vy,
-            angle: bird.angle,
-          }),
-        );
-        this.renderSimulation.applySnapshot(
-          packet.tick ?? 0,
-          this.targetPositions,
-          packet.lastProcessedInputSeqs ?? [],
-          Number(this.myPlayerId),
-          performance.now(),
-        );
-      }
-
       // 게임 오버 상태면 즉시 처리
       if (packet.isGameOver) {
         this.handleGameOverFromSync(packet);
       }
     };
 
+    const handleInputApplied = (event: Event) => {
+      const packet = (event as CustomEvent<FlappyInputAppliedPacket>).detail;
+      this.renderSimulation.applyInputApplied(packet);
+    };
+
+    const handleClockPong = (event: Event) => {
+      const packet = (event as CustomEvent<FlappyClockPongPacket>).detail;
+      this.renderSimulation.observeClockPong(
+        packet.clientSentAt,
+        packet.serverTick,
+        performance.now(),
+        packet.roundId,
+      );
+    };
+
     window.addEventListener('flappy:sync_state', handleSyncState);
+    window.addEventListener('flappy:input_applied', handleInputApplied);
+    window.addEventListener('flappy:clock_pong', handleClockPong);
 
     // 씬 종료 시 리스너 제거를 위해 저장
     this.events.once('shutdown', () => {
       window.removeEventListener('flappy:sync_state', handleSyncState);
+      window.removeEventListener('flappy:input_applied', handleInputApplied);
+      window.removeEventListener('flappy:clock_pong', handleClockPong);
+      if (this.clockSyncTimer !== undefined) {
+        window.clearInterval(this.clockSyncTimer);
+        this.clockSyncTimer = undefined;
+      }
     });
+  }
+
+  private ensureClockSync(): void {
+    if (isMockMode() || this.clockSyncTimer !== undefined) return;
+    const sendPing = () => {
+      const roundId = this.renderSimulation.getRoundId();
+      if (!roundId || this.isGameOver) return;
+      const packet: FlappyClockPingPacket = {
+        type: FlappyBirdPacketType.FLAPPY_CLOCK_PING,
+        roundId,
+        clientSentAt: performance.now(),
+      };
+      socketManager.send(packet);
+    };
+    sendPing();
+    this.clockSyncTimer = window.setInterval(sendPing, 2_000);
   }
 
   /**
@@ -424,6 +438,9 @@ export default class FlappyBirdsScene extends Phaser.Scene {
         gameOverData: state.flappyGameOverData,
         tick: state.flappyServerTick,
         lastProcessedInputSeqs: state.flappyLastProcessedInputSeqs,
+        roundId: state.flappyRoundId,
+        physicsSeed: state.flappyPhysicsSeed,
+        lastFlapTicks: state.flappyLastFlapTicks,
       }),
       (current, previous) => {
         // pendingGameOverFromSync 상태에서 birds 데이터가 도착하면 게임 오버 처리
@@ -482,13 +499,18 @@ export default class FlappyBirdsScene extends Phaser.Scene {
             velocityY: bird.vy,
             angle: bird.angle,
           }));
-          this.renderSimulation.applySnapshot(
-            current.tick,
-            this.targetPositions,
-            current.lastProcessedInputSeqs,
-            Number(this.myPlayerId),
-            performance.now(),
-          );
+          this.renderSimulation.applySnapshot({
+            tick: current.tick,
+            birds: this.targetPositions,
+            lastProcessedInputSeqs: current.lastProcessedInputSeqs,
+            lastFlapTicks: current.lastFlapTicks,
+            localPlayerIndex: Number(this.myPlayerId),
+            roundId: current.roundId ?? undefined,
+            physicsSeed: current.physicsSeed,
+            config: this.gameConfig,
+            receivedAt: performance.now(),
+          });
+          this.ensureClockSync();
         }
 
         // 파이프 데이터 업데이트
@@ -640,7 +662,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       });
     }
 
-    this.renderSimulation.reset(this.targetPositions);
+    this.renderSimulation.reset();
 
     console.log(
       `[FlappyBirdsScene] ${count}개의 새(스프라이트) 생성 완료 (connectAll=${this.gameConfig.connectAll})`,
@@ -1001,23 +1023,13 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       const inputSeq = this.nextInputSeq++;
 
       // 입력 프레임에 먼저 로컬 물리를 반영한다. 네트워크와 사운드는 그 뒤다.
-      this.renderSimulation.applyLocalJump(
-        playerIndex,
-        inputSeq,
-        FLAPPY_PHYSICS.FLAP_VELOCITY,
-      );
-      const target = this.targetPositions[playerIndex];
-      const sprite = this.birdSprites[playerIndex];
-      if (target && sprite) {
-        target.y = sprite.y / this.getRatio();
-        target.velocityY = FLAPPY_PHYSICS.FLAP_VELOCITY;
-        target.angle = -30;
-      }
+      this.renderSimulation.applyLocalJump(playerIndex, inputSeq);
 
       const jumpPacket: FlappyJumpPacket = {
         type: FlappyBirdPacketType.FLAPPY_JUMP,
         timestamp: Date.now(),
         inputSeq,
+        roundId: this.renderSimulation.getRoundId() || undefined,
       };
       socketManager.send(jumpPacket);
     }
@@ -1244,7 +1256,9 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       this.birdSprites.length > 0 &&
       this.birdSprites.some(
         (sprite) =>
-          sprite.active && Number.isFinite(sprite.x) && Number.isFinite(sprite.y),
+          sprite.active &&
+          Number.isFinite(sprite.x) &&
+          Number.isFinite(sprite.y),
       )
     );
   }

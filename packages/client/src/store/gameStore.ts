@@ -105,6 +105,9 @@ interface GameState {
   flappyServerTick: number;
   flappyCameraX: number;
   flappyLastProcessedInputSeqs: number[];
+  flappyRoundId: string | null;
+  flappyPhysicsSeed: number;
+  flappyLastFlapTicks: number[];
   flappyScore: number;
   isFlappyGameOver: boolean;
   flappyGameOverData: {
@@ -122,6 +125,9 @@ interface GameState {
     tick: number,
     cameraX: number,
     lastProcessedInputSeqs: number[],
+    roundId?: string,
+    physicsSeed?: number,
+    lastFlapTicks?: number[],
   ) => void;
   setFlappyScore: (score: number) => void;
   setFlappyGameOver: (data: {
@@ -219,6 +225,9 @@ export const useGameStore = create<GameState>()(
     flappyServerTick: 0,
     flappyCameraX: 0,
     flappyLastProcessedInputSeqs: [],
+    flappyRoundId: null,
+    flappyPhysicsSeed: 0,
+    flappyLastFlapTicks: [],
     flappyScore: 0,
     isFlappyGameOver: false,
     flappyGameOverData: null,
@@ -230,6 +239,9 @@ export const useGameStore = create<GameState>()(
       tick,
       cameraX,
       lastProcessedInputSeqs,
+      roundId,
+      physicsSeed,
+      lastFlapTicks,
     ) =>
       set({
         flappyBirds: birds,
@@ -237,6 +249,9 @@ export const useGameStore = create<GameState>()(
         flappyServerTick: tick,
         flappyCameraX: cameraX,
         flappyLastProcessedInputSeqs: lastProcessedInputSeqs,
+        flappyRoundId: roundId ?? null,
+        flappyPhysicsSeed: physicsSeed ?? 0,
+        flappyLastFlapTicks: lastFlapTicks ?? [],
       }),
     setFlappyScore: (score) => set({ flappyScore: score }),
     setFlappyGameOver: (data) =>
@@ -260,6 +275,9 @@ export const useGameStore = create<GameState>()(
         flappyServerTick: 0,
         flappyCameraX: 0,
         flappyLastProcessedInputSeqs: [],
+        flappyRoundId: null,
+        flappyPhysicsSeed: 0,
+        flappyLastFlapTicks: [],
         flappyScore: 0,
         isFlappyGameOver: false,
         flappyGameOverData: null,

@@ -9,7 +9,11 @@
     "build": "tsc",
     "type-check": "tsc --noEmit"
   },
+  "dependencies": {
+    "matter-js": "^0.20.0"
+  },
   "devDependencies": {
+    "@types/matter-js": "^0.20.2",
     "typescript": "~5.9.3"
   }
 }

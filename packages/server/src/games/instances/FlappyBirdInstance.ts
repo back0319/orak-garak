@@ -4,32 +4,36 @@ import {
   FlappyBirdGamePreset,
   resolveFlappyBirdPreset,
   FLAPPY_PHYSICS,
-} from '@main-game/common';
-import {
+  FLAPPY_PHYSICS_FPS,
+  FLAPPY_NETWORK_FPS,
+  FLAPPY_PHYSICS_FRAME_MS,
+  createFlappyPhysicsRuntime,
+  destroyFlappyPhysicsRuntime,
+  snapshotFlappyBirds,
+  applyDeterministicFlappyJump,
+  stepFlappyBirdPhysics,
+  calculateFlappyRopeConnections,
   FlappyBirdPacketType,
   FlappyScoreUpdatePacket,
   FlappyGameOverPacket,
   FlappyWorldStatePacket,
   FlappySyncStatePacket,
+  FlappyInputAppliedPacket,
+  FlappyClockPongPacket,
+  FlappyPipeData,
 } from '@main-game/common';
-import { FlappyPipeData, FlappyBirdData } from '@main-game/common';
 import { GameSession } from '../gameSession';
 import type { GameSocket } from '../../network/transport';
 import { FixedStepClock } from './fixedStepClock';
 
 // 상수 추출
 const {
-  GRAVITY_Y,
   BIRD_WIDTH,
   BIRD_HEIGHT,
-  FLAP_VELOCITY,
-  FLAP_VERTICAL_JITTER_RATIO,
   GAME_WIDTH,
   GAME_HEIGHT,
   FLAPPY_GROUND_Y,
   GAME_CENTER_X,
-  CATEGORY_BIRD,
-  CATEGORY_PIPE,
   CATEGORY_GROUND,
 } = FLAPPY_PHYSICS;
 
@@ -55,13 +59,15 @@ export class FlappyBirdInstance implements GameInstance {
     reason: 'pipe_collision' | 'ground_collision';
     collidedPlayerIndex: number;
   } | null = null;
+  private roundId: string = '';
+  private physicsSeed: number = 0;
 
   // 파이프 관리
   private pipes: InternalPipeData[] = [];
   private nextPipeId: number = 0;
 
   // 플레이어 추적
-  private lastFlapTime: Map<number, number> = new Map();
+  private lastFlapTicks: number[] = [];
   private lastProcessedInputSeqs: number[] = [];
 
   // 밧줄 물리
@@ -79,14 +85,12 @@ export class FlappyBirdInstance implements GameInstance {
 
   // 루프 관리
   private updateInterval: ReturnType<typeof setInterval> | null = null;
-  private readonly PHYSICS_FPS = 60;
-  private readonly NETWORK_TICK_RATE = 20;
-  private readonly PHYSICS_SUBSTEPS = 2;
   private readonly MAX_CATCH_UP_STEPS = 6;
   private readonly loopClock = new FixedStepClock(
-    1000 / this.PHYSICS_FPS,
+    FLAPPY_PHYSICS_FRAME_MS,
     this.MAX_CATCH_UP_STEPS,
   );
+  private lastBroadcastTick: number = 0;
 
   private session: GameSession;
 
@@ -94,13 +98,9 @@ export class FlappyBirdInstance implements GameInstance {
     this.session = session;
 
     // Matter.js 엔진 생성
-    this.engine = Matter.Engine.create({
-      gravity: { x: 0, y: GRAVITY_Y },
-      enableSleeping: false,
-      positionIterations: 10,
-      velocityIterations: 10,
-    });
-
+    const runtime = createFlappyPhysicsRuntime(0, false);
+    this.engine = runtime.engine;
+    this.birds = runtime.birds;
     this.world = this.engine.world;
   }
 
@@ -110,16 +110,18 @@ export class FlappyBirdInstance implements GameInstance {
     const playerCount = this.session.players.size;
 
     // 기존 객체 제거
-    Matter.World.clear(this.world, false);
-    this.birds = [];
+    destroyFlappyPhysicsRuntime({ engine: this.engine, birds: this.birds });
     this.score = 0;
     this.isGameOverState = false;
     this.lastGameOverData = null;
     this.pipes = [];
     this.nextPipeId = 0;
-    this.lastFlapTime.clear();
+    this.lastFlapTicks = Array.from({ length: playerCount }, () => 0);
     this.lastProcessedInputSeqs = Array.from({ length: playerCount }, () => 0);
     this.physicsTick = 0;
+    this.lastBroadcastTick = 0;
+    this.roundId = crypto.randomUUID();
+    this.physicsSeed = crypto.getRandomValues(new Uint32Array(1))[0] ?? 0;
 
     // 설정 적용
     this.pipeSpeed = resolved.pipeSpeed;
@@ -135,14 +137,19 @@ export class FlappyBirdInstance implements GameInstance {
       `[FlappyBirdInstance] 설정 적용: speed=${resolved.pipeSpeed}, spacing=${resolved.pipeSpacing}, gap=${resolved.pipeGap}, width=${resolved.pipeWidth}, ropeLength=${resolved.ropeLength}, connectAll=${resolved.connectAll}`,
     );
 
-    // 바닥 생성
+    const runtime = createFlappyPhysicsRuntime(playerCount, this.connectAll);
+    this.engine = runtime.engine;
+    this.world = runtime.engine.world;
+    this.birds = runtime.birds;
+
+    // 바닥은 충돌 판정용 좌표를 표현하며 실제 Matter 충돌은 비활성화한다.
     this.createGround();
 
-    // 플레이어 수만큼 새 생성
-    this.createBirds(playerCount);
-
     // 밧줄 연결 쌍 계산
-    this.ropeConnections = this.calculateRopeConnections(playerCount);
+    this.ropeConnections = calculateFlappyRopeConnections(
+      playerCount,
+      this.connectAll,
+    );
 
     console.log(
       `[FlappyBirdInstance] 게임 초기화 완료 (플레이어: ${playerCount}, 밧줄 연결: ${this.ropeConnections.map((c) => `${c[0]}-${c[1]}`).join(', ')})`,
@@ -158,7 +165,7 @@ export class FlappyBirdInstance implements GameInstance {
 
     this.updateInterval = setInterval(
       () => this.runScheduledUpdate(Date.now()),
-      1000 / this.NETWORK_TICK_RATE,
+      1000 / FLAPPY_PHYSICS_FPS,
     );
 
     console.log('[FlappyBirdInstance] 게임 시작');
@@ -176,17 +183,18 @@ export class FlappyBirdInstance implements GameInstance {
   destroy(): void {
     this.stop();
 
+    destroyFlappyPhysicsRuntime({ engine: this.engine, birds: this.birds });
+
     this.birds = [];
     this.pipes = [];
     this.score = 0;
     this.nextPipeId = 0;
     this.isGameOverState = false;
     this.ground = null;
-    this.lastFlapTime.clear();
+    this.lastFlapTicks = [];
     this.lastProcessedInputSeqs = [];
-
-    Matter.World.clear(this.world, false);
-    Matter.Engine.clear(this.engine);
+    this.roundId = '';
+    this.physicsSeed = 0;
 
     console.log('[FlappyBirdInstance] 정리 완료');
   }
@@ -204,7 +212,10 @@ export class FlappyBirdInstance implements GameInstance {
   handlePacket(socket: GameSocket, playerIndex: number, packet: any): void {
     switch (packet.type) {
       case FlappyBirdPacketType.FLAPPY_JUMP:
-        this.handleJump(playerIndex, packet.inputSeq);
+        this.handleJump(playerIndex, packet.inputSeq, packet.roundId);
+        break;
+      case FlappyBirdPacketType.FLAPPY_CLOCK_PING:
+        this.handleClockPing(socket, packet.clientSentAt, packet.roundId);
         break;
       case FlappyBirdPacketType.FLAPPY_REQUEST_SYNC:
         this.handleSyncRequest(socket);
@@ -218,13 +229,7 @@ export class FlappyBirdInstance implements GameInstance {
    */
   private handleSyncRequest(socket: GameSocket): void {
     // 현재 새 위치 정보
-    const birds: FlappyBirdData[] = this.birds.map((bird) => ({
-      x: bird.position.x,
-      y: bird.position.y,
-      vx: bird.velocity.x,
-      vy: bird.velocity.y,
-      angle: bird.angle * (180 / Math.PI),
-    }));
+    const birds = snapshotFlappyBirds(this.birds);
 
     // 현재 파이프 정보
     const pipes: FlappyPipeData[] = this.pipes.map((pipe) => ({
@@ -254,6 +259,9 @@ export class FlappyBirdInstance implements GameInstance {
       score: this.score,
       isGameOver: this.isGameOverState,
       lastProcessedInputSeqs: [...this.lastProcessedInputSeqs],
+      roundId: this.roundId,
+      physicsSeed: this.physicsSeed,
+      lastFlapTicks: [...this.lastFlapTicks],
       gameOverData: this.lastGameOverData ?? undefined,
     };
 
@@ -287,105 +295,6 @@ export class FlappyBirdInstance implements GameInstance {
     Matter.World.add(this.world, this.ground);
   }
 
-  private createBirds(count: number): void {
-    const positions = this.calculateBirdPositions(count);
-
-    for (let i = 0; i < count; i++) {
-      const { x, y } = positions[i];
-
-      const bird = Matter.Bodies.rectangle(x, y, BIRD_WIDTH, BIRD_HEIGHT, {
-        chamfer: { radius: 10 },
-        density: 0.001,
-        restitution: 0.2,
-        friction: 0.1,
-        frictionAir: 0.05,
-        label: 'bird',
-        collisionFilter: {
-          category: CATEGORY_BIRD,
-          mask: CATEGORY_BIRD | CATEGORY_PIPE | CATEGORY_GROUND,
-        },
-      });
-
-      this.birds.push(bird);
-      Matter.World.add(this.world, bird);
-    }
-
-    console.log(
-      `[FlappyBirdInstance] ${count}개의 새 생성 완료 (connectAll=${this.connectAll})`,
-    );
-  }
-
-  /**
-   * 새 초기 위치 계산
-   * connectAll=false: 수평 일렬
-   * connectAll=true: 3인 삼각형, 4인 마름모
-   */
-  private calculateBirdPositions(count: number): { x: number; y: number }[] {
-    const centerX = 300;
-    const centerY = 350;
-    const spacing = 80;
-
-    // 기본: 수평 일렬 배치
-    if (!this.connectAll || count < 3) {
-      const startX = 250;
-      const startY = 300;
-      return Array.from({ length: count }, (_, i) => ({
-        x: startX + i * 90,
-        y: startY + i * 3,
-      }));
-    }
-
-    // 모두 묶기: 도형 형태로 배치
-    if (count === 3) {
-      // 삼각형
-      return [
-        { x: centerX, y: centerY - spacing * 0.6 },
-        { x: centerX - spacing, y: centerY + spacing * 0.4 },
-        { x: centerX + spacing, y: centerY + spacing * 0.4 },
-      ];
-    }
-
-    if (count === 4) {
-      // 마름모
-      return [
-        { x: centerX, y: centerY - spacing },
-        { x: centerX - spacing, y: centerY },
-        { x: centerX, y: centerY + spacing },
-        { x: centerX + spacing, y: centerY },
-      ];
-    }
-
-    // 5인 이상: 원형 배치
-    return Array.from({ length: count }, (_, i) => {
-      const angle = (2 * Math.PI * i) / count - Math.PI / 2;
-      return {
-        x: centerX + spacing * Math.cos(angle),
-        y: centerY + spacing * Math.sin(angle),
-      };
-    });
-  }
-
-  /**
-   * 밧줄 연결 쌍 계산
-   * connectAll=false: 선형 연결 (0-1, 1-2, 2-3)
-   * connectAll=true: 폐쇄형 도형 (3인+)
-   */
-  private calculateRopeConnections(playerCount: number): [number, number][] {
-    if (playerCount < 2) return [];
-
-    const connections: [number, number][] = [];
-    for (let i = 0; i < playerCount - 1; i++) {
-      connections.push([i, i + 1]);
-    }
-
-    // 모두 묶기: 마지막과 첫 번째 연결 (3인 이상)
-    if (this.connectAll && playerCount >= 3) {
-      connections.push([playerCount - 1, 0]);
-    }
-
-    return connections;
-  }
-
   // ========== 게임 루프 ==========
 
   private runScheduledUpdate(nowMs: number): void {
@@ -396,9 +305,12 @@ export class FlappyBirdInstance implements GameInstance {
       if (!this.isRunning) return;
     }
 
-    // 네트워크 전송은 타이머 콜백당 한 번으로 제한한다. 런타임이 잠시
-    // 밀려 여러 물리 스텝을 따라잡아도 오래된 스냅샷을 연속 전송하지 않는다.
-    if (steps > 0) this.broadcastWorldState();
+    // 물리는 60Hz로 처리하되 네트워크는 최신 상태만 최대 20Hz로 보낸다.
+    const networkStep = FLAPPY_PHYSICS_FPS / FLAPPY_NETWORK_FPS;
+    if (steps > 0 && this.physicsTick - this.lastBroadcastTick >= networkStep) {
+      this.lastBroadcastTick = this.physicsTick;
+      this.broadcastWorldState();
+    }
   }
 
   private physicsUpdate(): void {
@@ -407,63 +319,17 @@ export class FlappyBirdInstance implements GameInstance {
     // 1. 파이프 업데이트
     this.updatePipes();
 
-    // 2. 개별 새 물리 제어
-    for (let i = 0; i < this.birds.length; i++) {
-      const bird = this.birds[i];
-      if (bird.isStatic) continue;
-
-      if (this.isGameOverState) {
-        // 게임 오버 시 수평 속도 감소
-        Matter.Body.setVelocity(bird, {
-          x: bird.velocity.x * 0.95,
-          y: bird.velocity.y,
-        });
-        continue;
-      }
-
-      // 기본 전진 속도 유지
-      const baseForwardSpeed = this.pipeSpeed * 1.5;
-      const currentVelX = bird.velocity.x;
-
-      // 마지막 점프 이후 경과 프레임
-      const lastFlap = this.lastFlapTime.get(i) ?? 0;
-      const framesSinceFlap = this.physicsTick - lastFlap;
-
-      // 점프하지 않은 시간이 길수록 감속
-      const noFlapPenalty = framesSinceFlap > 30 ? 0.97 : 0.995;
-
-      let newVelX: number;
-      if (currentVelX < baseForwardSpeed) {
-        newVelX = currentVelX + 0.05;
-      } else {
-        newVelX = currentVelX * noFlapPenalty;
-      }
-
-      Matter.Body.setVelocity(bird, {
-        x: newVelX,
-        y: bird.velocity.y,
-      });
-    }
-
-    // 3. 밧줄 최대 길이 제한
-    this.enforceRopeConstraint();
-
-    // 4. velocityY 기반 새 각도 업데이트
-    for (const bird of this.birds) {
-      if (!bird.isStatic) {
-        const angleDeg = Math.max(-30, Math.min(90, bird.velocity.y * 10));
-        Matter.Body.setAngle(bird, angleDeg * (Math.PI / 180));
-      }
-    }
-
-    // 5. 충돌 안정성을 위한 최소 서브스테핑. 기존 5회에서 2회로 줄여
-    // 초당 Matter.js 업데이트를 300회에서 120회로 낮춘다.
-    const stepTime = 1000 / this.PHYSICS_FPS / this.PHYSICS_SUBSTEPS;
-    for (let s = 0; s < this.PHYSICS_SUBSTEPS; s++) {
-      Matter.Engine.update(this.engine, stepTime);
-      this.checkCollisions();
-      if (!this.isRunning) return;
-    }
+    stepFlappyBirdPhysics({
+      runtime: { engine: this.engine, birds: this.birds },
+      tick: this.physicsTick,
+      lastFlapTicks: this.lastFlapTicks,
+      config: {
+        pipeSpeed: this.pipeSpeed,
+        ropeLength: this.ropeLength,
+        connectAll: this.connectAll,
+      },
+      onSubstep: () => this.checkCollisions(),
+    });
   }
 
   private updatePipes(): void {
@@ -523,7 +389,7 @@ export class FlappyBirdInstance implements GameInstance {
 
   // ========== 충돌 감지 ==========
 
-  private checkCollisions(): void {
+  private checkCollisions(): boolean {
     for (let i = 0; i < this.birds.length; i++) {
       const bird = this.birds[i];
       if (bird.isStatic) continue;
@@ -539,7 +405,7 @@ export class FlappyBirdInstance implements GameInstance {
         Matter.Body.setStatic(bird, true);
         Matter.Body.setAngle(bird, Math.PI / 2);
         this.handleGameOver('ground_collision', i);
-        continue;
+        return false;
       }
 
       // 2. 천장 충돌 (죽지 않고 막기만)
@@ -586,7 +452,7 @@ export class FlappyBirdInstance implements GameInstance {
         // Y축 충돌: 새가 갭 밖에 있으면 충돌
         if (birdY - halfHitbox < gapTop || birdY + halfHitbox > gapBottom) {
           this.handleGameOver('pipe_collision', i);
-          return;
+          return false;
         }
 
         // 통과 판정
@@ -609,6 +475,7 @@ export class FlappyBirdInstance implements GameInstance {
         }
       }
     }
+    return true;
   }
 
   // ========== 게임 오버 ==========
@@ -625,13 +492,7 @@ export class FlappyBirdInstance implements GameInstance {
     this.lastGameOverData = { reason, collidedPlayerIndex: playerIndex };
 
     // ❗ 중요: stopGame() 호출 전에 birds 데이터를 먼저 수집 (stopGame이 destroy를 호출하면 this.birds가 초기화됨)
-    const birds: FlappyBirdData[] = this.birds.map((bird) => ({
-      x: bird.position.x,
-      y: bird.position.y,
-      vx: bird.velocity.x,
-      vy: bird.velocity.y,
-      angle: bird.angle * (180 / Math.PI),
-    }));
+    const birds = snapshotFlappyBirds(this.birds);
 
     // 카메라 X 위치 계산 (새들의 평균 X 위치 기준)
     const avgX =
@@ -648,6 +509,7 @@ export class FlappyBirdInstance implements GameInstance {
       collidedPlayerIndex: playerIndex,
       birds,
       cameraX,
+      roundId: this.roundId,
     };
 
     // 패킷 전송 후 게임 정지 (이 순서가 중요!)
@@ -661,84 +523,60 @@ export class FlappyBirdInstance implements GameInstance {
 
   // ========== 입력 처리 ==========
 
-  private handleJump(playerIndex: number, inputSeq: unknown): void {
+  private handleJump(
+    playerIndex: number,
+    inputSeq: unknown,
+    packetRoundId?: string,
+  ): void {
     if (this.isGameOverState) return;
+    if (packetRoundId && packetRoundId !== this.roundId) return;
 
     if (!Number.isSafeInteger(inputSeq) || (inputSeq as number) <= 0) return;
 
     const sequence = inputSeq as number;
     if (sequence <= (this.lastProcessedInputSeqs[playerIndex] ?? 0)) return;
 
-    if (playerIndex >= 0 && playerIndex < this.birds.length) {
-      const bird = this.birds[playerIndex];
+    const applyTick = this.physicsTick + 1;
+    const applied = applyDeterministicFlappyJump(
+      this.birds,
+      playerIndex,
+      sequence,
+      this.physicsSeed,
+      {
+        flapBoostBase: this.flapBoostBase,
+        flapBoostRandom: this.flapBoostRandom,
+      },
+    );
+    if (!applied) return;
 
-      // 점프 시간 기록
-      this.lastFlapTime.set(playerIndex, this.physicsTick);
-
-      // 플랩 속도 적용
-      const extraBoost =
-        this.flapBoostBase + Math.random() * this.flapBoostRandom;
-      const verticalJitter =
-        (Math.random() - 0.5) *
-        Math.abs(FLAP_VELOCITY) *
-        FLAP_VERTICAL_JITTER_RATIO;
-
-      Matter.Body.setVelocity(bird, {
-        x: bird.velocity.x + extraBoost,
-        y: FLAP_VELOCITY + verticalJitter,
-      });
-
-      Matter.Body.setAngularVelocity(bird, 0);
-      this.lastProcessedInputSeqs[playerIndex] = sequence;
-    }
+    this.lastFlapTicks[playerIndex] = this.physicsTick;
+    this.lastProcessedInputSeqs[playerIndex] = sequence;
+    const appliedPacket: FlappyInputAppliedPacket = {
+      type: FlappyBirdPacketType.FLAPPY_INPUT_APPLIED,
+      roundId: this.roundId,
+      playerIndex,
+      inputSeq: sequence,
+      applyTick,
+    };
+    this.session.broadcastPacket(appliedPacket);
   }
 
-  // ========== 밧줄 물리 ==========
+  private handleClockPing(
+    socket: GameSocket,
+    clientSentAt: unknown,
+    packetRoundId?: string,
+  ): void {
+    if (!Number.isFinite(clientSentAt)) return;
+    if (packetRoundId && packetRoundId !== this.roundId) return;
 
-  private enforceRopeConstraint(): void {
-    for (const [indexA, indexB] of this.ropeConnections) {
-      const birdA = this.birds[indexA];
-      const birdB = this.birds[indexB];
-      if (!birdA || !birdB) continue;
-
-      const dx = birdB.position.x - birdA.position.x;
-      const dy = birdB.position.y - birdA.position.y;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-      if (distance === 0) continue;
-
-      if (distance > this.ropeLength) {
-        const nx = dx / distance;
-        const ny = dy / distance;
-        const excess = distance - this.ropeLength;
-        const correction = excess / 2;
-
-        // 위치 보정
-        Matter.Body.setPosition(birdA, {
-          x: birdA.position.x + nx * correction,
-          y: birdA.position.y + ny * correction,
-        });
-        Matter.Body.setPosition(birdB, {
-          x: birdB.position.x - nx * correction,
-          y: birdB.position.y - ny * correction,
-        });
-
-        // 속도 보정
-        const relVx = birdB.velocity.x - birdA.velocity.x;
-        const relVy = birdB.velocity.y - birdA.velocity.y;
-        const separatingSpeed = relVx * nx + relVy * ny;
-        if (separatingSpeed > 0) {
-          const adjust = separatingSpeed / 2;
-          Matter.Body.setVelocity(birdA, {
-            x: birdA.velocity.x + nx * adjust,
-            y: birdA.velocity.y + ny * adjust,
-          });
-          Matter.Body.setVelocity(birdB, {
-            x: birdB.velocity.x - nx * adjust,
-            y: birdB.velocity.y - ny * adjust,
-          });
-        }
-      }
-    }
+    const pong: FlappyClockPongPacket = {
+      type: FlappyBirdPacketType.FLAPPY_CLOCK_PONG,
+      roundId: this.roundId,
+      clientSentAt: clientSentAt as number,
+      serverTick: this.physicsTick,
+    };
+    const { type, ...payload } = pong;
+    socket.emit(type, payload);
   }
 
   // ========== 브로드캐스트 ==========
@@ -755,13 +593,7 @@ export class FlappyBirdInstance implements GameInstance {
     }
 
     // FlappyBirdData로 변환
-    const birds: FlappyBirdData[] = this.birds.map((bird) => ({
-      x: bird.position.x,
-      y: bird.position.y,
-      vx: bird.velocity.x,
-      vy: bird.velocity.y,
-      angle: bird.angle * (180 / Math.PI),
-    }));
+    const birds = snapshotFlappyBirds(this.birds);
 
     // FlappyPipeData로 변환 (내부 추적 필드 제거)
     const pipes: FlappyPipeData[] = this.pipes.map((pipe) => ({
@@ -779,6 +611,9 @@ export class FlappyBirdInstance implements GameInstance {
       pipes,
       cameraX,
       lastProcessedInputSeqs: [...this.lastProcessedInputSeqs],
+      roundId: this.roundId,
+      physicsSeed: this.physicsSeed,
+      lastFlapTicks: [...this.lastFlapTicks],
     };
 
     this.session.broadcastPacket(worldStatePacket);

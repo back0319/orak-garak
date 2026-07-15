@@ -410,6 +410,7 @@ export class GameRoom extends DurableObject<Env> {
     return ![
       AppleGamePacketType.DRAWING_DRAG_AREA,
       FlappyBirdPacketType.FLAPPY_JUMP,
+      FlappyBirdPacketType.FLAPPY_CLOCK_PING,
       FlappyBirdPacketType.FLAPPY_REQUEST_SYNC,
       MineSweeperPacketType.MS_REQUEST_SYNC,
     ].includes(packet.type as never);
