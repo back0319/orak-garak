@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "matter-js": "^0.20.0",
     "nes.css": "^2.3.0",
     "phaser": "^3.90.0",
