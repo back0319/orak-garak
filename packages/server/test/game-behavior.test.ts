@@ -11,7 +11,9 @@ import {
   getDefaultConfig,
   type FlappyBirdGamePreset,
   type PlayerState,
-  type ServerPacket,
+  type ServerToClientPacket,
+  type MSGameEndPacket,
+  type SetTimePacket,
 } from '@main-game/common';
 import type { GameSession } from '../src/games/gameSession';
 import { AppleGameInstance } from '../src/games/instances/AppleGameInstance';
@@ -34,14 +36,14 @@ afterEach(() => {
 
 describe('restored original game behavior', () => {
   it('runs five Matter substeps per 60 Hz Flappy tick and clamps the ceiling', () => {
-    const packets: ServerPacket[] = [];
+    const packets: ServerToClientPacket[] = [];
     const fakeSession = {
       players: new Map([
         ['one', player('one')],
         ['two', { ...player('two'), color: '#e76e55' }],
       ]),
       status: 'waiting',
-      broadcastPacket: (packet: ServerPacket) => packets.push(packet),
+      broadcastPacket: (packet: ServerToClientPacket) => packets.push(packet),
       stopGame: vi.fn(),
     } as unknown as GameSession;
 
@@ -53,7 +55,12 @@ describe('restored original game behavior', () => {
     const internal = game as unknown as {
       birds: Matter.Body[];
       physicsUpdate(): void;
+      handleGameOver(
+        reason: 'pipe_collision' | 'ground_collision',
+        playerIndex: number,
+      ): void;
       ropeLength: number;
+      updateInterval: ReturnType<typeof setInterval> | null;
     };
     const update = vi.spyOn(Matter.Engine, 'update');
 
@@ -70,8 +77,7 @@ describe('restored original game behavior', () => {
     expect(internal.birds[0].velocity.y).toBeLessThan(0.3);
     expect(
       packets.filter(
-        (packet) =>
-          packet.type === FlappyBirdPacketType.FLAPPY_WORLD_STATE,
+        (packet) => packet.type === FlappyBirdPacketType.FLAPPY_WORLD_STATE,
       ),
     ).toHaveLength(1);
 
@@ -89,20 +95,30 @@ describe('restored original game behavior', () => {
       ),
     ).toBeLessThanOrEqual(internal.ropeLength + 1);
 
+    game.start();
+    expect(internal.updateInterval).not.toBeNull();
+    internal.handleGameOver('pipe_collision', 0);
+    internal.handleGameOver('pipe_collision', 0);
+    expect(
+      packets.filter(
+        (packet) => packet.type === FlappyBirdPacketType.FLAPPY_GAME_OVER,
+      ),
+    ).toHaveLength(1);
     game.destroy();
+    expect(internal.updateInterval).toBeNull();
   });
 
   it('ends a 30-second Apple round once and not before the deadline', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-15T00:00:00Z'));
 
-    const packets: ServerPacket[] = [];
+    const packets: ServerToClientPacket[] = [];
     const session = {
       selectedGameType: GameType.APPLE_GAME,
       status: 'playing',
       players: new Map([['one', player('one')]]),
       gameConfigs: new Map(),
-      broadcastPacket: (packet: ServerPacket) => packets.push(packet),
+      broadcastPacket: (packet: ServerToClientPacket) => packets.push(packet),
       stopGame: vi.fn(),
       getIndex: () => 0,
       roomId: 'testroom00',
@@ -142,42 +158,80 @@ describe('restored original game behavior', () => {
     expect(
       packets.some((packet) => packet.type === AppleGamePacketType.SET_FIELD),
     ).toBe(true);
+    expect(session.stopGame).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        game as unknown as {
+          timerTimeout: ReturnType<typeof setTimeout> | null;
+        }
+      ).timerTimeout,
+    ).toBeNull();
   });
 
-  it('reveals the complete Minesweeper board in the game-end packet', () => {
-    const emitted: Array<{ event: string; payload: unknown }> = [];
+  it('uses the shared timer contract and ends Minesweeper exactly once', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-15T00:00:00Z'));
+
+    const packets: ServerToClientPacket[] = [];
+    const stopGame = vi.fn();
     const session = {
       selectedGameType: GameType.MINESWEEPER,
       status: 'playing',
       players: new Map([['one', player('one')]]),
       roomId: 'testroom00',
-      io: {
-        to: () => ({
-          emit: (event: string, payload: unknown) => {
-            emitted.push({ event, payload });
-          },
-        }),
-      },
+      broadcastPacket: (packet: ServerToClientPacket) => packets.push(packet),
+      stopGame,
     } as unknown as GameSession;
 
     const game = new MineSweeperInstance(session);
     game.initialize(getDefaultConfig(GameType.MINESWEEPER));
+    game.start();
+
+    const setTime = packets.find(
+      (packet): packet is SetTimePacket =>
+        packet.type === SystemPacketType.SET_TIME,
+    );
+    expect(setTime).toBeDefined();
+    if (!setTime) throw new Error('Missing SET_TIME packet');
+    expect(setTime).toMatchObject({
+      limitTime: expect.any(Number),
+      serverStartTime: Date.now(),
+      remainingMs: expect.any(Number),
+      endsAt: expect.any(Number),
+    });
+    expect(setTime.endsAt - setTime.serverStartTime).toBe(setTime.remainingMs);
+
+    (
+      game as unknown as { triggerGameEnd(reason: 'timeout'): void }
+    ).triggerGameEnd('timeout');
     (
       game as unknown as { triggerGameEnd(reason: 'timeout'): void }
     ).triggerGameEnd('timeout');
 
-    const end = emitted.find(
-      ({ event }) => event === MineSweeperPacketType.MS_GAME_END,
-    )?.payload as
-      | { tiles: Array<Array<{ state: TileState; isMine: boolean }>> }
-      | undefined;
+    const end = packets.find(
+      (packet): packet is MSGameEndPacket =>
+        packet.type === MineSweeperPacketType.MS_GAME_END,
+    );
 
     expect(end).toBeDefined();
     expect(end?.tiles.flat()).not.toHaveLength(0);
-    expect(end?.tiles.flat().every((tile) => tile.state === TileState.REVEALED)).toBe(
-      true,
-    );
+    expect(
+      end?.tiles.flat().every((tile) => tile.state === TileState.REVEALED),
+    ).toBe(true);
     expect(end?.tiles.flat().some((tile) => tile.isMine)).toBe(true);
+    expect(
+      packets.filter(
+        (packet) => packet.type === MineSweeperPacketType.MS_GAME_END,
+      ),
+    ).toHaveLength(1);
+    expect(stopGame).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        game as unknown as {
+          timerInterval: ReturnType<typeof setInterval> | null;
+        }
+      ).timerInterval,
+    ).toBeNull();
 
     game.destroy();
   });

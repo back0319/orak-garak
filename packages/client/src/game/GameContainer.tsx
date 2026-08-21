@@ -4,11 +4,10 @@ import AppleGameScene from './scene/apple/AppleGameScene';
 import { BootScene } from './scene/apple/BootScene';
 import FlappyBirdsScene from './scene/flappybirds/FlappyBirdsScene';
 import MineSweeperScene from './scene/minesweeper/MineSweeperScene';
-import type { FlappyBirdGamePreset } from '../../../common/src/config';
 import type { MineSweeperGamePreset } from './types/minesweeper.types';
 import type { PlayerData } from './types/common';
 import { GAME_WIDTH, GAME_HEIGHT } from './config/gameConfig';
-import { GameType } from '../../../common/src/config.ts';
+import { GameType, type FlappyBirdGamePreset } from '@main-game/common';
 import { useGameStore } from '../store/gameStore';
 import { useViewport } from '../hooks/useViewport';
 

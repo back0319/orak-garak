@@ -11,8 +11,10 @@ import {
   SystemPacketType,
   type TimeEndPacket,
   type UpdateScorePacket,
+  type UpdateDragAreaPacket,
   type PlayerData,
   type ReportCard,
+  toSocketPayload,
 } from '@main-game/common';
 import { GameSession } from '../gameSession';
 import { Socket } from 'socket.io';
@@ -133,16 +135,20 @@ export class AppleGameInstance implements GameInstance {
         if (isSame) {
           prev.repeatCount = (prev.repeatCount || 0) + 1;
           if (prev.repeatCount <= 3 || true) {
+            const updatePacket: UpdateDragAreaPacket = {
+              type: AppleGamePacketType.UPDATE_DRAG_AREA,
+              playerIndex,
+              startX: sx,
+              startY: sy,
+              endX: ex,
+              endY: ey,
+            };
             socket
               .to(this.session.roomId)
-              .emit(AppleGamePacketType.UPDATE_DRAG_AREA, {
-                type: AppleGamePacketType.UPDATE_DRAG_AREA,
-                playerIndex: playerIndex,
-                startX: sx,
-                startY: sy,
-                endX: ex,
-                endY: ey,
-              });
+              .emit(
+                AppleGamePacketType.UPDATE_DRAG_AREA,
+                toSocketPayload(updatePacket),
+              );
           } else {
             // 4번째 이상 동일한 패킷은 무시
             // 필요하면 로깅 추가
@@ -155,16 +161,20 @@ export class AppleGameInstance implements GameInstance {
             endY: ey,
             repeatCount: 1,
           });
+          const updatePacket: UpdateDragAreaPacket = {
+            type: AppleGamePacketType.UPDATE_DRAG_AREA,
+            playerIndex,
+            startX: sx,
+            startY: sy,
+            endX: ex,
+            endY: ey,
+          };
           socket
             .to(this.session.roomId)
-            .emit(AppleGamePacketType.UPDATE_DRAG_AREA, {
-              type: AppleGamePacketType.UPDATE_DRAG_AREA,
-              playerIndex: playerIndex,
-              startX: sx,
-              startY: sy,
-              endX: ex,
-              endY: ey,
-            });
+            .emit(
+              AppleGamePacketType.UPDATE_DRAG_AREA,
+              toSocketPayload(updatePacket),
+            );
         }
 
         break;

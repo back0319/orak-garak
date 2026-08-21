@@ -4,9 +4,10 @@ import type {
   FlappyBirdData,
   FlappyPipeData,
   PlayerData,
-} from '../../../common/src/common-type';
-import { type GameType, type GameConfig } from '../../../common/src/config';
-import type { LobbyChatMessage } from '../../../common/src/packets';
+  GameType,
+  GameConfig,
+  LobbyChatMessage,
+} from '@main-game/common';
 
 // 드래그 영역 데이터 타입
 export interface DragAreaData {
@@ -204,8 +205,7 @@ export const useGameStore = create<GameState>()(
         };
       }),
     setLobbyChatError: (message) => set({ lobbyChatError: message }),
-    resetLobbyChat: () =>
-      set({ lobbyChatMessages: [], lobbyChatError: null }),
+    resetLobbyChat: () => set({ lobbyChatMessages: [], lobbyChatError: null }),
 
     setScreen: (screen: 'landing' | 'lobby' | 'game') => set({ screen }),
 

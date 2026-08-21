@@ -1,11 +1,18 @@
 import { createServer, type Server as HttpServer } from 'node:http';
-import { Server, type Socket } from 'socket.io';
-import type { ServerPacket } from '@main-game/common';
+import { Server } from 'socket.io';
+import {
+  fromClientSocketPayload,
+  isClientToServerEventName,
+  SystemPacketType,
+  type ClientToServerEvents,
+  type ServerToClientEvents,
+} from '@main-game/common';
 import {
   handleClientPacket,
   handleConnection,
   handleDisconnect,
 } from './network/serverHandler';
+import type { GameSocket, GameSocketServer } from './network/socketTypes';
 
 const DEFAULT_ORIGINS = [
   'https://orak-garak.vercel.app',
@@ -29,7 +36,7 @@ export function isAllowedOrigin(origin?: string): boolean {
 
 export interface GameServer {
   httpServer: HttpServer;
-  io: Server;
+  io: GameSocketServer;
 }
 
 export function createGameServer(): GameServer {
@@ -50,21 +57,24 @@ export function createGameServer(): GameServer {
     response.end(JSON.stringify({ error: 'not_found' }));
   });
 
-  const io = new Server(httpServer, {
-    cors: {
-      origin(origin, callback) {
-        callback(
-          isAllowedOrigin(origin) ? null : new Error('origin_not_allowed'),
-          isAllowedOrigin(origin),
-        );
+  const io = new Server<ClientToServerEvents, ServerToClientEvents>(
+    httpServer,
+    {
+      cors: {
+        origin(origin, callback) {
+          callback(
+            isAllowedOrigin(origin) ? null : new Error('origin_not_allowed'),
+            isAllowedOrigin(origin),
+          );
+        },
+        methods: ['GET', 'POST'],
       },
-      methods: ['GET', 'POST'],
+      transports: ['websocket'],
+      maxHttpBufferSize: 16 * 1024,
     },
-    transports: ['websocket'],
-    maxHttpBufferSize: 16 * 1024,
-  });
+  );
 
-  io.on('connection', (socket: Socket) => {
+  io.on('connection', (socket: GameSocket) => {
     handleConnection(socket);
     const recentMessages: number[] = [];
 
@@ -75,7 +85,7 @@ export function createGameServer(): GameServer {
       }
 
       if (recentMessages.length >= 120) {
-        socket.emit('SYSTEM_MESSAGE', {
+        socket.emit(SystemPacketType.SYSTEM_MESSAGE, {
           message: '메시지 전송 속도가 너무 빠릅니다.',
         });
         socket.disconnect(true);
@@ -83,7 +93,14 @@ export function createGameServer(): GameServer {
       }
 
       recentMessages.push(now);
-      const packet = { type: eventName, ...data } as ServerPacket;
+      if (!isClientToServerEventName(eventName)) {
+        socket.emit(SystemPacketType.SYSTEM_MESSAGE, {
+          message: '지원하지 않는 이벤트입니다.',
+        });
+        return;
+      }
+
+      const packet = fromClientSocketPayload(eventName, data);
       handleClientPacket(io, socket, packet);
     });
 

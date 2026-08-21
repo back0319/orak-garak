@@ -2,7 +2,7 @@ import {
   SystemPacketType,
   type RoomUpdatePacket,
   RoomUpdateType,
-  type ServerPacket,
+  type ServerToClientPacket,
   type GameConfigUpdatePacket,
   type ReturnToTheLobbyPacket,
   type GameStatus,
@@ -15,12 +15,15 @@ import {
   type LobbyChatMessage,
   sanitizeForApple,
   FlappyBirdPacketType,
+  getDefaultConfig,
+  toSocketPayload,
 } from '@main-game/common';
-import { Server, Socket } from 'socket.io';
+import { Socket } from 'socket.io';
 import { GameInstance } from './instances/GameInstance';
 import { AppleGameInstance } from './instances/AppleGameInstance';
 import { FlappyBirdInstance } from './instances/FlappyBirdInstance';
 import { MineSweeperInstance } from './instances/MineSweeperInstance';
+import type { GameSocketServer } from '../network/socketTypes';
 
 export class GameSession {
   private static readonly FLAPPY_COUNTDOWN_MS = 1_000;
@@ -33,6 +36,7 @@ export class GameSession {
 
   // 게임별 설정 저장
   public gameConfigs: Map<GameType, GameConfig> = new Map();
+  private configuredGameTypes = new Set<GameType>();
 
   // 게임 상태 관리
   public status: GameStatus = 'waiting';
@@ -50,9 +54,13 @@ export class GameSession {
   private lobbyChatSequence = 0;
 
   constructor(
-    public io: Server,
+    public io: GameSocketServer,
     public roomId: string,
-  ) {}
+  ) {
+    for (const gameType of Object.values(GameType)) {
+      this.gameConfigs.set(gameType, getDefaultConfig(gameType));
+    }
+  }
 
   // ========== PLAYER MANAGEMENT (공통) ==========
   public addPlayer(id: string, name: string) {
@@ -92,23 +100,15 @@ export class GameSession {
       console.log(
         `[GameSession] 플레이어 ${id}가 게임 중 퇴장 - 게임 상태 리셋`,
       );
-      // 게임 인스턴스 정리
-      if (this.games) {
-        this.games.stop();
-        this.games.destroy();
-        this.games = null;
-      }
-      // 상태를 waiting으로 리셋
-      this.status = 'waiting';
-      this.clearFlappyStartTimers();
+      this.resetToWaiting();
     }
 
     // Notify remaining clients about updated room player list
-    this.updateRemainingPlayers(id); // io 필요하면 전달하도록 수정 필요
+    this.updateRemainingPlayers(id);
 
     // 모든 플레이어가 나간 경우 추가 정리 (이미 위에서 처리되지만 안전장치)
     if (this.players.size === 0) {
-      this.stopGame();
+      this.resetToWaiting();
     }
   }
 
@@ -123,8 +123,11 @@ export class GameSession {
     return -1;
   }
 
-  public updateRemainingPlayers(id: string) {
-    // Send JOIN to existing players (excluding the new player)
+  public updateRemainingPlayers(
+    id: string,
+    updateType: RoomUpdateType = RoomUpdateType.PLAYER_QUIT,
+  ) {
+    // Notify all players except the socket that caused the membership change.
     for (const [playerId] of this.players) {
       if (playerId === id) continue; // 새로 접속한 플레이어 제외
 
@@ -134,14 +137,17 @@ export class GameSession {
       const roomUpdatePacket2Other: RoomUpdatePacket = {
         type: SystemPacketType.ROOM_UPDATE,
         players: this.getPlayers(),
-        updateType: RoomUpdateType.PLAYER_QUIT,
+        updateType,
         yourIndex: this.getIndex(playerId),
         roomId: this.roomId,
       };
-      otherSocket.emit(SystemPacketType.ROOM_UPDATE, roomUpdatePacket2Other);
+      otherSocket.emit(
+        SystemPacketType.ROOM_UPDATE,
+        toSocketPayload(roomUpdatePacket2Other),
+      );
     }
     console.log(
-      `[Server] Sent ROOM_UPDATE (JOIN) to room ${this.roomId} (excluding ${id})`,
+      `[Server] Sent ROOM_UPDATE (${updateType}) to room ${this.roomId} (excluding ${id})`,
     );
   }
 
@@ -219,6 +225,7 @@ export class GameSession {
       const prev = existingCfg;
       const curr = storedConfig as AppleGameRenderConfig;
       const noChange =
+        this.configuredGameTypes.has(selectedGameType) &&
         prev &&
         prev.gridCols === curr.gridCols &&
         prev.gridRows === curr.gridRows &&
@@ -239,6 +246,7 @@ export class GameSession {
 
     // store the sanitized config
     this.gameConfigs.set(selectedGameType, storedConfig);
+    this.configuredGameTypes.add(selectedGameType);
     // todo 제거 대상 this.gameConfigs.set(selectedGameType, storedConfig);
 
     // Notify clients about the updated game config
@@ -255,22 +263,21 @@ export class GameSession {
       console.log('status가 playing이라서 시작 못 함.: ', this.status);
       return;
     }
-    this.status = 'playing';
-    this.clearFlappyStartTimers();
-
-    // 이전 게임 인스턴스 정리 (혹시 남아있을 경우 대비)
-    if (this.games) {
-      console.log('[GameSession] 이전 게임 인스턴스 정리 중...');
-      this.games.destroy();
-      this.games = null;
+    const nextGame = this.createGameInstance(this.selectedGameType);
+    const config =
+      this.gameConfigs.get(this.selectedGameType) ??
+      getDefaultConfig(this.selectedGameType);
+    try {
+      nextGame.initialize(config);
+    } catch (error) {
+      nextGame.destroy();
+      throw error;
     }
 
-    // 게임 인스턴스 생성
-    // todo 이거 config 값을 생성할 때부터
-    this.games = this.createGameInstance(this.selectedGameType);
-
-    const config = this.gameConfigs.get(this.selectedGameType);
-    this.games.initialize(config as GameConfig);
+    this.clearFlappyStartTimers();
+    this.destroyGameInstance();
+    this.games = nextGame;
+    this.status = 'playing';
 
     // READY_SCENE 브로드캐스트
     this.broadcastPacket({
@@ -282,10 +289,7 @@ export class GameSession {
       this.waitingForFlappyReady = true;
       this.flappyReadyTimeout = setTimeout(() => {
         if (!this.waitingForFlappyReady || this.status !== 'playing') return;
-        this.clearFlappyStartTimers();
-        this.games?.destroy();
-        this.games = null;
-        this.status = 'waiting';
+        this.resetToWaiting();
         this.broadcastPacket({
           type: SystemPacketType.SYSTEM_MESSAGE,
           message: '게임 화면 준비 시간이 초과되어 로비로 돌아갑니다.',
@@ -295,17 +299,27 @@ export class GameSession {
       return;
     }
 
-    this.games.start();
+    try {
+      this.games.start();
+    } catch (error) {
+      this.resetToWaiting();
+      throw error;
+    }
   }
 
   public stopGame(): void {
     this.clearFlappyStartTimers();
     this.status = 'ended';
-    if (this.games) {
-      this.games.stop();
-      this.games.destroy();
-      this.games = null;
-    }
+    this.destroyGameInstance();
+  }
+
+  public dispose(): void {
+    this.resetToWaiting();
+    this.players.clear();
+    this.availableColors = new Set(PLAYER_COLORS);
+    this.lobbyChatMessages = [];
+    this.lobbyChatSequence = 0;
+    this.configuredGameTypes.clear();
   }
 
   private createGameInstance(gameType: GameType): GameInstance {
@@ -355,14 +369,7 @@ export class GameSession {
       return;
     }
 
-    this.clearFlappyStartTimers();
-    if (this.games) {
-      this.games.stop();
-      this.games.destroy();
-      this.games = null;
-    }
-
-    this.status = 'waiting';
+    this.resetToWaiting();
 
     const returnToLobbyPacket: ReturnToTheLobbyPacket = {
       type: SystemPacketType.RETURN_TO_THE_LOBBY,
@@ -469,6 +476,19 @@ export class GameSession {
     this.flappyStartAcknowledgedPlayers.clear();
   }
 
+  private destroyGameInstance(): void {
+    if (!this.games) return;
+    this.games.stop();
+    this.games.destroy();
+    this.games = null;
+  }
+
+  private resetToWaiting(): void {
+    this.clearFlappyStartTimers();
+    this.destroyGameInstance();
+    this.status = 'waiting';
+  }
+
   private startFlappyPhysics(inputGraceMs: number): void {
     if (!this.waitingForFlappyStartAcks) return;
     this.waitingForFlappyStartAcks = false;
@@ -482,11 +502,8 @@ export class GameSession {
     }, inputGraceMs);
   }
 
-  public broadcastPacket(packet: ServerPacket) {
-    // packet에서 type과 나머지 데이터를 분리
-    const { type, ...payload } = packet;
-
-    // Broadcast callback
-    this.io.to(this.roomId).emit(packet.type, payload);
+  public broadcastPacket(packet: ServerToClientPacket) {
+    // Socket.IO event name이 discriminator이며 payload에는 type을 중복하지 않는다.
+    this.io.to(this.roomId).emit(packet.type, toSocketPayload(packet) as never);
   }
 }

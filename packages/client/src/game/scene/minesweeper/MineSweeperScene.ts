@@ -24,13 +24,13 @@ import {
   DEFAULT_MINESWEEPER_PRESET,
   resolveMineSweeperPreset,
 } from '../../types/minesweeper.types';
-import { MineSweeperPacketType } from '../../../../../common/src/packets';
-import type {
-  MSGameInitPacket,
-  MSTileUpdatePacket,
-  MSScoreUpdatePacket,
-  MSGameEndPacket,
-} from '../../../../../common/src/minesweeperPackets';
+import {
+  MineSweeperPacketType,
+  type MSGameInitPacket,
+  type MSTileUpdatePacket,
+  type MSScoreUpdatePacket,
+  type MSGameEndPacket,
+} from '@main-game/common';
 import { useGameStore } from '../../../store/gameStore';
 
 // 플레이어 데이터 인터페이스
@@ -121,10 +121,6 @@ export default class MineSweeperScene extends Phaser.Scene {
     // 소켓 연결
     this.socket = getSocket();
 
-    // 기존 소켓 이벤트 정리
-    this.socket.off('game_init');
-    this.socket.off('tile_update');
-    this.socket.off('score_update');
     this.events.off('updatePlayers');
 
     this.editorCreate();
@@ -293,15 +289,8 @@ export default class MineSweeperScene extends Phaser.Scene {
       setTimeout(() => {
         this.emitGameEnd(scoreUpdates);
       }, 100);
-    } else {
-      // 실제 서버 모드: 서버에 타임업 알림
-      console.log('[MineSweeperScene] 서버 모드 - game_time_up 이벤트 전송');
-      this.socket.emit('game_time_up', {
-        timestamp: Date.now(),
-      });
-      // 서버에서 final_settlement와 game_end 이벤트를 보낼 것임
-      // 여기서는 아무것도 하지 않음 (서버 응답 대기)
     }
+    // 실제 서버 모드에서는 서버 타이머가 종료를 결정하므로 응답을 기다린다.
   }
 
   /**
@@ -439,34 +428,36 @@ export default class MineSweeperScene extends Phaser.Scene {
    * 타일 열기 요청 전송
    */
   private sendRevealTile(row: number, col: number): void {
-    if (isMockMode()) {
+    if (isMockMode() && this.socket instanceof MockSocket) {
       // Mock 모드: 기존 이벤트 사용
       this.socket.emit('reveal_tile', {
         playerId: this.myPlayerId,
         row,
         col,
       });
-    } else {
-      // 서버 모드: 새 패킷 타입 사용
-      this.socket.emit(MineSweeperPacketType.MS_REVEAL_TILE, { row, col });
+      return;
     }
+
+    // 서버 모드: 새 패킷 타입 사용
+    this.socket.emit(MineSweeperPacketType.MS_REVEAL_TILE, { row, col });
   }
 
   /**
    * 깃발 토글 요청 전송
    */
   private sendToggleFlag(row: number, col: number): void {
-    if (isMockMode()) {
+    if (isMockMode() && this.socket instanceof MockSocket) {
       // Mock 모드: 기존 이벤트 사용
       this.socket.emit('toggle_flag', {
         playerId: this.myPlayerId,
         row,
         col,
       });
-    } else {
-      // 서버 모드: 새 패킷 타입 사용
-      this.socket.emit(MineSweeperPacketType.MS_TOGGLE_FLAG, { row, col });
+      return;
     }
+
+    // 서버 모드: 새 패킷 타입 사용
+    this.socket.emit(MineSweeperPacketType.MS_TOGGLE_FLAG, { row, col });
   }
 
   /**
@@ -540,18 +531,16 @@ export default class MineSweeperScene extends Phaser.Scene {
     if (isServerMode) {
       this.setupServerEventListeners();
     }
-
-    // 깃발 카운트 업데이트 이벤트 (공통)
-    this.socket.on('flagCountUpdate', (data: Record<string, number>) => {
-      console.log('[MineSweeperScene] flagCountUpdate 수신:', data);
-      this.events.emit('flagCountUpdate', data);
-    });
   }
 
   /**
    * Mock 모드 이벤트 리스너 (기존 호환)
    */
   private setupMockEventListeners(): void {
+    if (!(this.socket instanceof MockSocket)) {
+      return;
+    }
+
     // 게임 초기화 이벤트
     this.socket.on('game_init', (data: GameInitEvent) => {
       console.log('[MineSweeperScene] game_init 수신:', data);
@@ -576,6 +565,11 @@ export default class MineSweeperScene extends Phaser.Scene {
     this.socket.on('game_end', (data: any) => {
       console.log('[MineSweeperScene] game_end 수신:', data);
       this.handleGameEnd(data);
+    });
+
+    this.socket.on('flagCountUpdate', (data: Record<string, number>) => {
+      console.log('[MineSweeperScene] flagCountUpdate 수신:', data);
+      this.events.emit('flagCountUpdate', data);
     });
   }
 
@@ -1098,11 +1092,13 @@ export default class MineSweeperScene extends Phaser.Scene {
     }
 
     // 소켓 이벤트 리스너 제거 (Mock 모드)
-    this.socket.off('game_init');
-    this.socket.off('tile_update');
-    this.socket.off('score_update');
-    this.socket.off('flagCountUpdate');
-    this.socket.off('game_end');
+    if (this.socket instanceof MockSocket) {
+      this.socket.off('game_init');
+      this.socket.off('tile_update');
+      this.socket.off('score_update');
+      this.socket.off('flagCountUpdate');
+      this.socket.off('game_end');
+    }
 
     // 서버 모드 이벤트 리스너 제거 (CustomEvent)
     this.serverEventCleanup.forEach((cleanup) => cleanup());

@@ -11,6 +11,7 @@ import {
   type FlappySyncStatePacket,
   type FlappyPipeData,
   type FlappyBirdData,
+  toSocketPayload,
 } from '@main-game/common';
 import { GameSession } from '../gameSession';
 import { Socket } from 'socket.io';
@@ -235,7 +236,10 @@ export class FlappyBirdInstance implements GameInstance {
     };
 
     // 요청한 클라이언트에게만 전송
-    socket.emit('packet', syncPacket);
+    socket.emit(
+      FlappyBirdPacketType.FLAPPY_SYNC_STATE,
+      toSocketPayload(syncPacket),
+    );
 
     console.log(
       `[FlappyBirdInstance] 동기화 응답 전송 (gameOver: ${this.isGameOverState}, score: ${this.score})`,

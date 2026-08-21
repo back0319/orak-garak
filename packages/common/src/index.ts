@@ -143,3 +143,23 @@ export {
   type FlappyBirdData,
   type FlappyPipeData,
 } from './common-type';
+
+// ========== Socket.IO Directional Contract ==========
+export {
+  CLIENT_TO_SERVER_EVENT_NAMES,
+  SERVER_TO_CLIENT_EVENT_NAMES,
+  toSocketPayload,
+  fromClientSocketPayload,
+  fromServerSocketPayload,
+  isClientToServerEventName,
+  isServerToClientEventName,
+  type SocketPayload,
+  type ClientToServerPacket,
+  type ServerToClientPacket,
+  type ClientToServerPayloads,
+  type ServerToClientPayloads,
+  type ClientToServerEvents,
+  type ServerToClientEvents,
+  type ClientToServerEventName,
+  type ServerToClientEventName,
+} from './socketEvents';

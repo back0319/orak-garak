@@ -1,28 +1,23 @@
-import { Server, Socket } from 'socket.io';
 import {
   SystemPacketType,
-  ServerPacket,
+  type ClientToServerPacket,
   RoomUpdatePacket,
   RoomUpdateType,
   GameConfigUpdatePacket,
   type LobbyChatHistoryPacket,
   type LobbyChatMessagePacket,
+  toSocketPayload,
 } from '@main-game/common';
-import { GameSession } from '../games/gameSession';
+import type { GameSession } from '../games/gameSession';
+import { roomRegistry } from '../rooms/roomRegistry';
 import { customAlphabet } from 'nanoid';
+import type { GameSocket, GameSocketServer } from './socketTypes';
 
 // 커스텀 nanoid 생성기
 const alphabet = '0123456789abcdefghijklmnopqrstuvwxyz';
 const generateRoomId = customAlphabet(alphabet, 10);
 
-// Room ID -> Session
-const sessions = new Map<string, GameSession>();
-
-// Player ID -> Room ID
-const playerRooms = new Map<string, string>(); // todo 얘가 지금 기본 socket.io room 으로 대체 가능성이 있음.
-const cleanupTimers = new Map<string, NodeJS.Timeout>();
 const lobbyChatRateLimits = new Map<string, number[]>();
-const EMPTY_ROOM_TTL_MS = Number(process.env.EMPTY_ROOM_TTL_MS) || 60 * 60 * 1000;
 const LOBBY_CHAT_WINDOW_MS = 5_000;
 const LOBBY_CHAT_MAX_PER_WINDOW = 3;
 
@@ -34,7 +29,9 @@ function normalizePlayerName(value: unknown): string | null {
 }
 
 function isValidRoomId(value: unknown): value is string {
-  return typeof value === 'string' && (value === '' || /^[a-z0-9]{10}$/.test(value));
+  return (
+    typeof value === 'string' && (value === '' || /^[a-z0-9]{10}$/.test(value))
+  );
 }
 
 function normalizeLobbyChatMessage(value: unknown): string | null {
@@ -58,30 +55,20 @@ function consumeLobbyChatRateLimit(socketId: string): boolean {
   return true;
 }
 
-function emitLobbyChatHistory(socket: Socket, session: GameSession): void {
+function emitLobbyChatHistory(socket: GameSocket, session: GameSession): void {
   const packet: LobbyChatHistoryPacket = {
     type: SystemPacketType.LOBBY_CHAT_HISTORY,
     messages: session.getLobbyChatHistory(),
   };
-  socket.emit(SystemPacketType.LOBBY_CHAT_HISTORY, {
-    messages: packet.messages,
-  });
-}
-
-export function getSession(roomId: string): GameSession | undefined {
-  return sessions.get(roomId);
+  socket.emit(SystemPacketType.LOBBY_CHAT_HISTORY, toSocketPayload(packet));
 }
 
 export function clearServerState(): void {
-  for (const timer of cleanupTimers.values()) clearTimeout(timer);
-  cleanupTimers.clear();
-  for (const session of sessions.values()) session.stopGame();
-  sessions.clear();
-  playerRooms.clear();
+  roomRegistry.disposeAll();
   lobbyChatRateLimits.clear();
 }
 
-export function handleConnection(socket: Socket) {
+export function handleConnection(socket: GameSocket) {
   // 클라이언트 정보 추출
   const clientIP =
     (socket.handshake.headers['x-forwarded-for'] as string) ||
@@ -107,30 +94,21 @@ export function handleConnection(socket: Socket) {
 
 export function handleDisconnect(socketId: string) {
   lobbyChatRateLimits.delete(socketId);
-  const roomId = playerRooms.get(socketId);
-  if (roomId) {
-    const session = sessions.get(roomId);
-    if (session) {
-      session.removePlayer(socketId);
-      if (session.players.size === 0 && !cleanupTimers.has(roomId)) {
-        cleanupTimers.set(
-          roomId,
-          setTimeout(() => {
-            const current = sessions.get(roomId);
-            if (current?.players.size === 0) sessions.delete(roomId);
-            cleanupTimers.delete(roomId);
-          }, EMPTY_ROOM_TTL_MS),
-        );
-      }
-    }
-    playerRooms.delete(socketId);
-  }
+  const roomId = roomRegistry.getPlayerRoom(socketId);
+  if (!roomId) return;
+
+  roomRegistry.releasePlayer(socketId, roomId);
+  const session = roomRegistry.getSession(roomId);
+  if (!session) return;
+
+  session.removePlayer(socketId);
+  if (session.players.size === 0) roomRegistry.scheduleCleanup(roomId);
 }
 
 export function handleClientPacket(
-  io: Server,
-  socket: Socket,
-  packet: ServerPacket,
+  io: GameSocketServer,
+  socket: GameSocket,
+  packet: ClientToServerPacket,
 ) {
   try {
     console.log(
@@ -147,17 +125,26 @@ export function handleClientPacket(
         });
         return;
       }
-      joinPlayerToGame(io, socket, packet.roomId, playerName);
+      void joinPlayerToGame(io, socket, packet.roomId, playerName).catch(
+        (error) => {
+          console.error('[Server] Unexpected room join failure:', error);
+          if (socket.connected) {
+            socket.emit(SystemPacketType.SYSTEM_MESSAGE, {
+              message: '방 참여에 실패했습니다.',
+            });
+          }
+        },
+      );
       return;
     }
 
-    const roomId = playerRooms.get(socket.id);
+    const roomId = roomRegistry.getPlayerRoom(socket.id);
     if (!roomId) {
       console.log(`[Server] roomId 없음 - socket.id: ${socket.id}`);
       return;
     }
 
-    const session = sessions.get(roomId);
+    const session = roomRegistry.getSession(roomId);
     if (!session) {
       console.log(`[Server] session 없음 - roomId: ${roomId}`);
       return;
@@ -183,7 +170,8 @@ export function handleClientPacket(
 
         if (!consumeLobbyChatRateLimit(socket.id)) {
           socket.emit(SystemPacketType.LOBBY_CHAT_ERROR, {
-            message: '메시지를 너무 빠르게 보내고 있어요. 잠시 후 다시 시도해주세요.',
+            message:
+              '메시지를 너무 빠르게 보내고 있어요. 잠시 후 다시 시도해주세요.',
           });
           break;
         }
@@ -199,17 +187,8 @@ export function handleClientPacket(
       }
 
       case SystemPacketType.GAME_START_REQ: {
-        console.log(`[Server] GAME_START_REQ received from ${socket.id}`);
-        console.log(
-          `[Server] Player object:`,
-          session.players.get(socket.id)
-            ? session.players.get(socket.id)!.playerName
-            : 'null',
-        );
         if (session.isHost(socket.id)) {
-          console.log(
-            '[Server] Order is 0, starting game... (currently commented out)',
-          );
+          console.log(`[Server] Host ${socket.id} starting game`);
           session.startGame();
         } else {
           const playerExists = !!session.players.get(socket.id);
@@ -243,66 +222,6 @@ export function handleClientPacket(
         break;
     }
 
-    //     case AppleGamePacketType.DRAWING_DRAG_AREA: {
-    //   // 브로드캐스트 (나 제외)
-    //   // 검증 로직 필요함. 게임 안쪽 영역이 맞는지, 그리고 정규화된 건지
-    //   // 드래그 영역은 정규화가 필요함.
-    //   // 추가: 이전에 보냈던 것과 동일한지 비교해 동일한 패킷이 3번까지만 브로드캐스트,
-    //   // 4번째부터는 무시하도록 함.
-    //   const playerIndex = session.getIndex(socket.id);
-    //   const sx = packet.startX;
-    //   const sy = packet.startY;
-    //   const ex = packet.endX;
-    //   const ey = packet.endY;
-
-    //   const prev = playerDragState.get(playerIndex);
-    //   const isSame =
-    //     !!prev &&
-    //     prev.startX === sx &&
-    //     prev.startY === sy &&
-    //     prev.endX === ex &&
-    //     prev.endY === ey;
-
-    //   if (isSame) {
-    //     prev.repeatCount = (prev.repeatCount || 0) + 1;
-    //     if (prev.repeatCount <= 3 || true) {
-    //       socket.to(roomId).emit(AppleGamePacketType.UPDATE_DRAG_AREA, {
-    //         type: AppleGamePacketType.UPDATE_DRAG_AREA,
-    //         playerIndex: playerIndex,
-    //         startX: sx,
-    //         startY: sy,
-    //         endX: ex,
-    //         endY: ey,
-    //       });
-    //     } else {
-    //       // 4번째 이상 동일한 패킷은 무시
-    //       // 필요하면 로깅 추가
-    //     }
-    //   } else {
-    //     playerDragState.set(playerIndex, {
-    //       startX: sx,
-    //       startY: sy,
-    //       endX: ex,
-    //       endY: ey,
-    //       repeatCount: 1,
-    //     });
-    //     socket.to(roomId).emit(AppleGamePacketType.UPDATE_DRAG_AREA, {
-    //       type: AppleGamePacketType.UPDATE_DRAG_AREA,
-    //       playerIndex: playerIndex,
-    //       startX: sx,
-    //       startY: sy,
-    //       endX: ex,
-    //       endY: ey,
-    //     });
-    //   }
-
-    //   break;
-    // }
-
-    // case AppleGamePacketType.CONFIRM_DRAG_AREA:
-    //   session.handleDragConfirm(socket.id, packet.indices);
-    //   break;
-
     // 게임별 패킷 라우팅
     if (packet.type.startsWith('APPLE_')) {
       session.handleGamePacket(socket, packet);
@@ -326,38 +245,74 @@ export function handleClientPacket(
   }
 }
 
-// index.ts에서 호출할 초기화/조인 헬퍼
 const MAX_PLAYERS_PER_ROOM = 4;
+
+async function claimAndJoinSocket(
+  socket: GameSocket,
+  roomId: string,
+): Promise<boolean> {
+  if (!roomRegistry.claimPlayer(socket.id, roomId, MAX_PLAYERS_PER_ROOM)) {
+    const alreadyJoined = roomRegistry.getPlayerRoom(socket.id) !== undefined;
+    socket.emit(SystemPacketType.SYSTEM_MESSAGE, {
+      message: alreadyJoined ? '이미 방에 참여 중입니다.' : 'Room is full',
+    });
+    if (!alreadyJoined) socket.disconnect();
+    return false;
+  }
+
+  try {
+    await socket.join(roomId);
+  } catch (error) {
+    console.error(`[Server] Failed to join room ${roomId}:`, error);
+    roomRegistry.releasePlayer(socket.id, roomId);
+    if (socket.connected) {
+      socket.emit(SystemPacketType.SYSTEM_MESSAGE, {
+        message: '방 참여에 실패했습니다.',
+      });
+    }
+    return false;
+  }
+
+  if (!socket.connected) {
+    roomRegistry.releasePlayer(socket.id, roomId);
+    return false;
+  }
+  return true;
+}
+
 export async function joinPlayerToGame(
-  io: Server,
-  socket: Socket,
+  io: GameSocketServer,
+  socket: GameSocket,
   roomId: string,
   playerName: string,
 ) {
-  if (!roomId) {
-    roomId = generateRoomId();
-  }
-
-  console.log(
-    `[Server] Player ${playerName} (${socket.id}) joining room ${roomId}`,
-  );
-  // 중복 조인 방지
-  if (playerRooms.has(socket.id)) {
+  if (roomRegistry.getPlayerRoom(socket.id)) {
     socket.emit(SystemPacketType.SYSTEM_MESSAGE, {
       message: '이미 방에 참여 중입니다.',
     });
     return;
   }
 
-  let session = sessions.get(roomId);
-
-  const cleanupTimer = cleanupTimers.get(roomId);
-  if (cleanupTimer) {
-    clearTimeout(cleanupTimer);
-    cleanupTimers.delete(roomId);
+  const isCreatingRoom = roomId === '';
+  if (isCreatingRoom) {
+    do {
+      roomId = generateRoomId();
+    } while (roomRegistry.hasSession(roomId));
   }
 
-  // 게임이 진행 중이거나 결과 화면이면 접속 거부
+  console.log(
+    `[Server] Player ${playerName} (${socket.id}) joining room ${roomId}`,
+  );
+
+  let session = roomRegistry.getSession(roomId);
+
+  if (!isCreatingRoom && !session) {
+    socket.emit(SystemPacketType.SYSTEM_MESSAGE, {
+      message: '존재하지 않는 방입니다.',
+    });
+    return;
+  }
+
   if (session && session.status !== 'waiting') {
     const message =
       session.status === 'playing'
@@ -370,68 +325,61 @@ export async function joinPlayerToGame(
     return;
   }
 
+  let createdSession = false;
   if (!session) {
-    session = new GameSession(io, roomId);
-    sessions.set(roomId, session); // todo 얘는 생성할 때만 있어도 되는 거 아님?
+    session = roomRegistry.createSession(io, roomId);
+    createdSession = true;
     console.log(`Created new Game Session for ${roomId}`);
+  } else {
+    const socketRoomSize = io.sockets.adapter.rooms.get(roomId)?.size ?? 0;
+    if (socketRoomSize >= MAX_PLAYERS_PER_ROOM) {
+      socket.emit(SystemPacketType.SYSTEM_MESSAGE, { message: 'Room is full' });
+      socket.disconnect();
+      return;
+    }
+    if (session.getPlayerCount() >= MAX_PLAYERS_PER_ROOM) {
+      socket.emit(SystemPacketType.SYSTEM_MESSAGE, {
+        message: '방이 꽉 찼습니다.',
+      });
+      socket.disconnect();
+      return;
+    }
+    roomRegistry.cancelCleanup(roomId);
+  }
 
-    socket.join(roomId);
-    playerRooms.set(socket.id, roomId);
-    session.addPlayer(socket.id, playerName);
-
-    const roomUpdatePacket2Player: RoomUpdatePacket = {
-      type: SystemPacketType.ROOM_UPDATE,
-      players: session.getPlayers(),
-      updateType: RoomUpdateType.INIT_ROOM,
-      yourIndex: session.getIndex(socket.id),
-      roomId: roomId,
-    };
-    socket.emit(SystemPacketType.ROOM_UPDATE, roomUpdatePacket2Player);
-    emitLobbyChatHistory(socket, session);
-    console.log(
-      `[Server] Sent ROOM_UPDATE (${roomUpdatePacket2Player.updateType}) to ${socket.id}`,
-    );
+  const joined = await claimAndJoinSocket(socket, roomId);
+  if (!joined) {
+    if (createdSession) {
+      roomRegistry.disposeRoom(roomId, session);
+    } else if (session.players.size === 0) {
+      roomRegistry.scheduleCleanup(roomId);
+    }
     return;
   }
 
-  // todo 얘 rooms에 등록되는 과정 어떻게 됨?
-  const room = io.sockets.adapter.rooms.get(roomId);
-  const numClients = room ? room.size : 0;
-
-  // todo: 여기 방 numClients 랑 session.getPlayerCount() 둘 역할 중복되어서 정리해야 함
-  if (numClients >= MAX_PLAYERS_PER_ROOM) {
-    socket.emit(SystemPacketType.SYSTEM_MESSAGE, { message: 'Room is full' });
-    socket.disconnect();
-    return;
-  }
-  // 방 인원 검사 해야 함.
-  if (session.getPlayerCount() >= MAX_PLAYERS_PER_ROOM) {
-    socket.emit(SystemPacketType.SYSTEM_MESSAGE, {
-      message: '방이 꽉 찼습니다.',
-    });
-    socket.disconnect();
-    return;
-  }
-
-  // Socket join
-  await socket.join(roomId);
-  playerRooms.set(socket.id, roomId);
   session.addPlayer(socket.id, playerName);
 
   const roomUpdatePacket2Player: RoomUpdatePacket = {
     type: SystemPacketType.ROOM_UPDATE,
     players: session.getPlayers(),
-    updateType: RoomUpdateType.PLAYER_JOIN,
+    updateType: createdSession
+      ? RoomUpdateType.INIT_ROOM
+      : RoomUpdateType.PLAYER_JOIN,
     yourIndex: session.getIndex(socket.id),
-    roomId: roomId,
+    roomId,
   };
-  socket.emit(SystemPacketType.ROOM_UPDATE, roomUpdatePacket2Player);
+  socket.emit(
+    SystemPacketType.ROOM_UPDATE,
+    toSocketPayload(roomUpdatePacket2Player),
+  );
   emitLobbyChatHistory(socket, session);
   console.log(
     `[Server] Sent ROOM_UPDATE (${roomUpdatePacket2Player.updateType}) to ${socket.id}`,
   );
 
-  session.updateRemainingPlayers(socket.id);
+  if (createdSession) return;
+
+  session.updateRemainingPlayers(socket.id, RoomUpdateType.PLAYER_JOIN);
 
   // 현재 게임 설정을 새 플레이어에게 전송 (동기화)
   const currentConfig = session.gameConfigs.get(session.selectedGameType);
@@ -441,24 +389,10 @@ export async function joinPlayerToGame(
       selectedGameType: session.selectedGameType,
       gameConfig: currentConfig,
     };
-    socket.emit(SystemPacketType.GAME_CONFIG_UPDATE, configPacket);
+    socket.emit(
+      SystemPacketType.GAME_CONFIG_UPDATE,
+      toSocketPayload(configPacket),
+    );
     console.log(`[Server] Sent GAME_CONFIG_UPDATE to new player ${socket.id}`);
   }
-
-  // 만약 방이 꽉 찼거나 특정 조건 만족 시 게임 시작?
-  // 현재는 자동 시작 or 수동 시작. 일단 자동 시작 로직 예시:
-  // if (session.getPlayerCount() >= 2 && session.status === 'waiting') {
-  //   session.startGame();
-  // }
-  // 혹은 클라이언트가 시작 요청을 보내야 함?
-  // 요구사항에 '게임 시작' 명시적 로직은 없지만, TEST를 위해
-  // 접속 시 바로 시작하거나 일정 인원에서 시작하도록 설정.
-  // 일단 인원 1명이라도 들어오면 바로 시작하도록 해서 테스트 용이하게 함 (개발중)
-  // if (session.status === 'waiting') {
-  //   session.startGame();
-  // } else if (session.status === 'playing') {
-  //   // 이미 진행중이면 현재 상태 전송 (Reconnection logic)
-  //   socket.emit(GamePacketType.SET_FIELD, { type: AppleGamePacketType.SET_FIELD, apples: session.apples });
-  //   socket.emit(GamePacketType.SET_TIME, { type: AppleGamePacketType.SET_TIME, limitTime: session.timeLeft });
-  // }
 }

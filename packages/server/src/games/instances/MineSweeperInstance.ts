@@ -23,7 +23,11 @@ import {
   type MSTileUpdatePacket,
   type MSScoreUpdatePacket,
   type MSGameEndPacket,
+  type MineSweeperServerPacket,
+  SystemPacketType,
+  type SetTimePacket,
   PLAYER_COLORS,
+  toSocketPayload,
 } from '@main-game/common';
 
 /** 연쇄 타일 열기 최대 점수 (지뢰 페널티 제외) */
@@ -45,12 +49,14 @@ export class MineSweeperInstance implements GameInstance {
   private remainingMines: number = 0;
   private totalTime: number = 180;
   private timerInterval: NodeJS.Timeout | null = null;
+  private finished = false;
 
   constructor(private session: GameSession) {}
 
   // ========== LIFECYCLE ==========
 
   initialize(gameConfig: GameConfig): void {
+    this.finished = false;
     const preset = gameConfig as MineSweeperGamePreset;
     const resolved = resolveMineSweeperPreset(preset);
 
@@ -97,17 +103,22 @@ export class MineSweeperInstance implements GameInstance {
       remainingMines: this.remainingMines,
       timestamp: Date.now(),
     };
-    this.broadcast(MineSweeperPacketType.MS_GAME_INIT, initPacket);
+    this.broadcast(initPacket);
 
     // SET_TIME 패킷 전송
-    this.session.broadcastPacket({
-      type: 'SET_TIME' as any,
+    const serverStartTime = Date.now();
+    const remainingMs = this.totalTime * 1000;
+    const setTimePacket: SetTimePacket = {
+      type: SystemPacketType.SET_TIME,
       limitTime: this.totalTime,
-      serverStartTime: Date.now(),
-    });
+      serverStartTime,
+      endsAt: serverStartTime + remainingMs,
+      remainingMs,
+    };
+    this.session.broadcastPacket(setTimePacket);
 
     // 타이머 시작
-    this.startTimer();
+    this.startTimer(setTimePacket.endsAt);
 
     console.log(
       `[MineSweeperInstance] 게임 시작, 제한 시간: ${this.totalTime}초`,
@@ -429,7 +440,7 @@ export class MineSweeperInstance implements GameInstance {
       console.log(
         `[MineSweeperInstance] MS_TILE_UPDATE 브로드캐스트 - tiles: ${allUpdates.length}개`,
       );
-      this.broadcast(MineSweeperPacketType.MS_TILE_UPDATE, tileUpdatePacket);
+      this.broadcast(tileUpdatePacket);
     } else {
       console.log('[MineSweeperInstance] 열린 타일 없음 - 브로드캐스트 안함');
     }
@@ -448,7 +459,7 @@ export class MineSweeperInstance implements GameInstance {
         reason: 'flood_fill',
         timestamp: Date.now(),
       };
-      this.broadcast(MineSweeperPacketType.MS_SCORE_UPDATE, scoreUpdatePacket);
+      this.broadcast(scoreUpdatePacket);
 
       // 세션의 플레이어 점수도 업데이트
       this.updateSessionScore(playerId, player.score);
@@ -582,7 +593,7 @@ export class MineSweeperInstance implements GameInstance {
       remainingMines: this.remainingMines,
       timestamp: Date.now(),
     };
-    this.broadcast(MineSweeperPacketType.MS_TILE_UPDATE, tileUpdatePacket);
+    this.broadcast(tileUpdatePacket);
   }
 
   // ========== WIN CONDITION & SCORING ==========
@@ -615,12 +626,13 @@ export class MineSweeperInstance implements GameInstance {
 
   private triggerGameEnd(reason: 'win' | 'timeout' | 'all_mines_hit'): void {
     // 이미 게임이 종료된 상태면 중복 처리 방지
-    if (this.session.status === 'ended') {
+    if (this.finished || this.session.status === 'ended') {
       console.log(
         '[MineSweeperInstance] 게임이 이미 종료됨 - triggerGameEnd 무시',
       );
       return;
     }
+    this.finished = true;
 
     this.stopTimer();
 
@@ -652,10 +664,10 @@ export class MineSweeperInstance implements GameInstance {
       tiles: this.getFinalClientTiles(),
       timestamp: Date.now(),
     };
-    this.broadcast(MineSweeperPacketType.MS_GAME_END, gameEndPacket);
+    this.broadcast(gameEndPacket);
 
-    // 세션 상태 업데이트
-    this.session.status = 'ended';
+    // 공통 세션 lifecycle을 통해 instance와 timer를 함께 정리한다.
+    this.session.stopGame();
 
     console.log(`[MineSweeperInstance] 게임 종료: ${reason}`);
   }
@@ -724,10 +736,7 @@ export class MineSweeperInstance implements GameInstance {
             reason: 'final_settlement',
             timestamp: Date.now(),
           };
-          this.broadcast(
-            MineSweeperPacketType.MS_SCORE_UPDATE,
-            scoreUpdatePacket,
-          );
+          this.broadcast(scoreUpdatePacket);
 
           // 세션 점수 업데이트
           this.updateSessionScore(playerId, player.score);
@@ -740,13 +749,10 @@ export class MineSweeperInstance implements GameInstance {
 
   // ========== TIMER ==========
 
-  private startTimer(): void {
+  private startTimer(endTime: number): void {
     if (this.timerInterval) {
       clearInterval(this.timerInterval);
     }
-
-    const startTime = Date.now();
-    const endTime = startTime + this.totalTime * 1000;
 
     this.timerInterval = setInterval(() => {
       if (Date.now() >= endTime) {
@@ -807,12 +813,12 @@ export class MineSweeperInstance implements GameInstance {
     }
   }
 
-  private broadcast(eventType: string, packet: any): void {
+  private broadcast(packet: MineSweeperServerPacket): void {
     console.log(
-      `[MineSweeperInstance] broadcast 호출 - eventType: ${eventType}, roomId: ${this.session.roomId}`,
+      `[MineSweeperInstance] broadcast 호출 - eventType: ${packet.type}, roomId: ${this.session.roomId}`,
     );
-    this.session.io.to(this.session.roomId).emit(eventType, packet);
-    console.log(`[MineSweeperInstance] broadcast 완료 - ${eventType}`);
+    this.session.broadcastPacket(packet);
+    console.log(`[MineSweeperInstance] broadcast 완료 - ${packet.type}`);
   }
 
   /**
@@ -835,7 +841,10 @@ export class MineSweeperInstance implements GameInstance {
       timestamp: Date.now(),
     };
 
-    socket.emit(MineSweeperPacketType.MS_GAME_INIT, initPacket);
+    socket.emit(
+      MineSweeperPacketType.MS_GAME_INIT,
+      toSocketPayload(initPacket),
+    );
     console.log(
       `[MineSweeperInstance] MS_GAME_INIT 전송 (동기화) - playerId: ${socket.id}`,
     );

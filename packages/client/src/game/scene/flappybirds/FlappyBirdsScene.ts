@@ -3,7 +3,6 @@
 /* START OF COMPILED CODE */
 
 import Phaser from 'phaser';
-import type { Socket } from 'socket.io-client';
 import { getSocket, isMockMode } from '../../network/socketService';
 import { MockSocket } from '../../network/MockSocket';
 import { MockServerCore } from '../../physics/MockServerCore';
@@ -26,16 +25,16 @@ import { CONSTANTS } from '../../types/common';
 import type {
   FlappyBirdGamePreset,
   ResolvedFlappyBirdConfig,
-} from '../../../../../common/src/config';
-import { resolveFlappyBirdPreset } from '../../../../../common/src/config';
+} from '@main-game/common';
 import {
+  resolveFlappyBirdPreset,
   FlappyBirdPacketType,
   type FlappyJumpPacket,
   type FlappyRequestSyncPacket,
-} from '../../../../../common/src/packets';
+} from '@main-game/common';
 import PipeManager from './PipeManager';
 import { useGameStore } from '../../../store/gameStore';
-import { socketManager } from '../../../network/socket';
+import { socketManager, type GameClientSocket } from '../../../network/socket';
 
 export const DEFAULT_FLAPPYBIRD_PRESET: FlappyBirdGamePreset = {
   pipeSpeed: 'normal',
@@ -55,7 +54,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     '#f2d024': 'flappybird_4', // 노랑
   };
 
-  private socket!: Socket | MockSocket;
+  private socket!: GameClientSocket | MockSocket;
   private mockServerCore?: MockServerCore;
   private myPlayerId: PlayerId = '0';
   private pipeManager?: PipeManager;
@@ -122,10 +121,12 @@ export default class FlappyBirdsScene extends Phaser.Scene {
     // 소켓 연결 먼저 (기존 리스너 정리를 위해)
     this.socket = getSocket();
 
-    // 기존 소켓 이벤트 완전 정리 (중복 방지)
-    this.socket.off('update_positions');
-    this.socket.off('score_update');
-    this.socket.off('game_over');
+    // Mock 전용 legacy 리스너 정리 (중복 방지)
+    if (this.socket instanceof MockSocket) {
+      this.socket.off('update_positions');
+      this.socket.off('score_update');
+      this.socket.off('game_over');
+    }
     this.events.off('updatePlayers');
     console.log('[FlappyBirdsScene] 기존 소켓 이벤트 리스너 제거 완료');
 
@@ -304,15 +305,17 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       if (this.countdownTimer !== undefined) {
         window.clearTimeout(this.countdownTimer);
       }
-      this.countdownTimer = window.setTimeout(() => {
-        activateGameStart();
-      }, countdownMs ?? Math.max(0, startsAt - Date.now()));
+      this.countdownTimer = window.setTimeout(
+        () => {
+          activateGameStart();
+        },
+        countdownMs ?? Math.max(0, startsAt - Date.now()),
+      );
     };
 
     const handleGameStart = (event: Event) => {
-      const { inputGraceMs } = (
-        event as CustomEvent<{ inputGraceMs?: number }>
-      ).detail;
+      const { inputGraceMs } = (event as CustomEvent<{ inputGraceMs?: number }>)
+        .detail;
       startDisplayMs = inputGraceMs ?? startDisplayMs;
       activateGameStart();
     };
@@ -861,9 +864,11 @@ export default class FlappyBirdsScene extends Phaser.Scene {
   private setupSocketListeners() {
     // 기존 리스너 제거 (중복 등록 방지)
     this.events.off('updatePlayers');
-    this.socket.off('update_positions');
-    this.socket.off('score_update');
-    this.socket.off('game_over');
+    if (this.socket instanceof MockSocket) {
+      this.socket.off('update_positions');
+      this.socket.off('score_update');
+      this.socket.off('game_over');
+    }
 
     // 플레이어 정보 업데이트 (인원수 조절 등)
     this.events.on(
@@ -926,7 +931,11 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       },
     );
 
-    // 위치 업데이트 수신
+    if (!(this.socket instanceof MockSocket)) {
+      return;
+    }
+
+    // Mock 위치 업데이트 수신
     this.socket.on('update_positions', (data: UpdatePositionsEvent) => {
       if (this.isGameOver) {
         return;
@@ -1036,7 +1045,7 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       return;
     }
 
-    if (isMockMode()) {
+    if (isMockMode() && this.socket instanceof MockSocket) {
       // Mock 모드: 기존 형식 유지
       this.socket.emit('flap', {
         playerId: playerId,
@@ -1360,10 +1369,12 @@ export default class FlappyBirdsScene extends Phaser.Scene {
       console.log('[FlappyBirdsScene] 파이프 매니저 정리 완료');
     }
 
-    // 소켓 이벤트 리스너 제거
-    this.socket.off('update_positions');
-    this.socket.off('score_update');
-    this.socket.off('game_over');
+    // Mock 소켓 이벤트 리스너 제거
+    if (this.socket instanceof MockSocket) {
+      this.socket.off('update_positions');
+      this.socket.off('score_update');
+      this.socket.off('game_over');
+    }
     this.events.off('updatePlayers');
     console.log('[FlappyBirdsScene] 소켓 이벤트 리스너 제거 완료');
   }

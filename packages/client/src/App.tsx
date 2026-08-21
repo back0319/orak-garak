@@ -11,14 +11,17 @@ import GameResult from './game/utils/game-result/GameResult';
 import SoundSetting from './components/SoundSetting';
 import LandingPage from './components/LandingPage';
 import Lobby from './components/Lobby';
-import type { FlappyBirdGamePreset } from '../../common/src/config';
 import {
   type MineSweeperGamePreset,
   DEFAULT_MINESWEEPER_PRESET,
 } from './game/types/minesweeper.types';
-import { GameType } from '../../common/src/config';
 import type { PlayerId } from './game/types/flappybird.types';
-import { SystemPacketType, type ServerPacket } from '../../common/src/packets';
+import {
+  GameType,
+  SystemPacketType,
+  type ClientToServerPacket,
+  type FlappyBirdGamePreset,
+} from '@main-game/common';
 import { GAME_DESCRIPTIONS } from './constants/gameDescriptions';
 import flappyBird1 from './assets/images/flappybird_1.png';
 import flappyBird2 from './assets/images/flappybird_2.png';
@@ -229,7 +232,7 @@ function AppContent() {
     console.log('[App] handleReplay 호출됨');
 
     // 서버에 리플레이 요청 전송
-    const replayReq: ServerPacket = {
+    const replayReq: ClientToServerPacket = {
       type: SystemPacketType.REPLAY_REQ,
     };
     socketManager.send(replayReq);
@@ -248,7 +251,7 @@ function AppContent() {
 
   const handleLobby = useCallback(() => {
     // 서버에 로비 복귀 요청 전송
-    const lobbyReq: ServerPacket = {
+    const lobbyReq: ClientToServerPacket = {
       type: SystemPacketType.RETURN_TO_THE_LOBBY_REQ,
     };
     socketManager.send(lobbyReq);
@@ -339,8 +342,8 @@ function AppContent() {
       //loadBGM('minesweeper');
     }
 
-    const gameStartReq: ServerPacket = {
-      type: SystemPacketType.GAME_START_REQ || 'GAME_START_REQ',
+    const gameStartReq: ClientToServerPacket = {
+      type: SystemPacketType.GAME_START_REQ,
     };
     socketManager.send(gameStartReq);
     console.log('GAME_START_REQ sent: ', gameStartReq);

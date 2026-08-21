@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { socketManager } from '../../network/socket';
-import { AppleGamePacketType } from '../../../../common/src/packets';
+import { AppleGamePacketType } from '@main-game/common';
 import { GAME_WIDTH, GAME_HEIGHT } from '../config/gameConfig';
 
 interface NormalizedRect {

@@ -1,14 +1,25 @@
-import { io, Socket } from 'socket.io-client';
-import { type ServerPacket } from '../../../common/src/packets.ts';
+import { io, type Socket } from 'socket.io-client';
+import {
+  SystemPacketType,
+  fromServerSocketPayload,
+  isServerToClientEventName,
+  toSocketPayload,
+  type ClientToServerEvents,
+  type ClientToServerPacket,
+  type ServerToClientEvents,
+} from '@main-game/common';
 import { handleServerPacket } from './clientHandler.ts';
 import { useGameStore } from '../store/gameStore.ts';
 
-export type GameClientSocket = Socket;
+export type GameClientSocket = Socket<
+  ServerToClientEvents,
+  ClientToServerEvents
+>;
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3000';
 
 class SocketManager {
-  private socket: Socket | null = null;
+  private socket: GameClientSocket | null = null;
 
   connect(url: string): void {
     // [중요] 이미 소켓이 생성되어 있고 연결 중이라면 중복 실행 방지
@@ -31,9 +42,11 @@ class SocketManager {
 
     // 통합 핸들러 연결
     this.socket.onAny((eventName, data) => {
-      // 패킷 구조가 { type, ...data } 형태라면 그대로 전달
-      // 모든 수신 데이터는 ServerPacket 규격을 따름을 명시
-      const packet = { type: eventName, ...data } as ServerPacket;
+      if (!isServerToClientEventName(eventName)) {
+        console.warn('[SocketManager] Unknown server event:', eventName);
+        return;
+      }
+      const packet = fromServerSocketPayload(eventName, data);
       handleServerPacket(packet);
     });
 
@@ -49,20 +62,21 @@ class SocketManager {
         const { setScreen, setConnectionError, resetLobbyChat } =
           useGameStore.getState();
         resetLobbyChat();
-        setConnectionError({ message: '서버와의 연결이 끊겨 랜딩페이지로 돌아왔습니다.' });
+        setConnectionError({
+          message: '서버와의 연결이 끊겨 랜딩페이지로 돌아왔습니다.',
+        });
         setScreen('landing');
       }
     });
   }
 
   // 서버로 데이터 전송할 때 사용하는 메서드
-  send(packet: ServerPacket) {
+  send(packet: ClientToServerPacket) {
     if (!this.socket) {
       console.warn('[SocketManager] Cannot send packet: socket is null');
       return;
     }
-    const { type, ...data } = packet;
-    this.socket.emit(type, data);
+    this.socket.emit(packet.type, toSocketPayload(packet));
   }
 
   async joinRoom(roomId: string, playerName: string): Promise<void> {
@@ -72,7 +86,7 @@ class SocketManager {
     if (!socket) throw new Error('소켓을 생성하지 못했습니다.');
 
     const join = () => {
-      socket.emit('JOIN_ROOM', { roomId, playerName });
+      socket.emit(SystemPacketType.JOIN_ROOM, { roomId, playerName });
     };
 
     if (socket.connected) {
@@ -108,7 +122,7 @@ class SocketManager {
     return this.socket.id;
   }
 
-  getSocket(): Socket | null {
+  getSocket(): GameClientSocket | null {
     return this.socket;
   }
 }

@@ -3,13 +3,16 @@ import { io as createClient, type Socket } from 'socket.io-client';
 import {
   FlappyBirdPacketType,
   GameType,
+  RoomUpdateType,
   SystemPacketType,
   getDefaultConfig,
   type LobbyChatMessage,
+  type FlappySyncStatePacket,
   type RoomUpdatePacket,
 } from '@main-game/common';
 import { createGameServer, type GameServer } from '../src/index';
 import { clearServerState } from '../src/network/serverHandler';
+import { roomRegistry } from '../src/rooms/roomRegistry';
 
 function waitForEvent<T>(
   socket: Socket,
@@ -38,20 +41,43 @@ async function connect(url: string): Promise<Socket> {
   return socket;
 }
 
+async function waitUntil(
+  condition: () => boolean,
+  timeoutMs = 1000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline)
+      throw new Error('Timed out waiting for condition');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe('Socket.IO game server', () => {
   let server: GameServer | undefined;
   const sockets: Socket[] = [];
+  const originalEmptyRoomTtl = process.env.EMPTY_ROOM_TTL_MS;
 
-  beforeEach(() => clearServerState());
+  beforeEach(() => {
+    delete process.env.EMPTY_ROOM_TTL_MS;
+    clearServerState();
+  });
 
   afterEach(async () => {
     for (const socket of sockets.splice(0)) socket.disconnect();
     if (server) {
       server.io.close();
-      await new Promise<void>((resolve) => server?.httpServer.close(() => resolve()));
+      await new Promise<void>((resolve) =>
+        server?.httpServer.close(() => resolve()),
+      );
       server = undefined;
     }
     clearServerState();
+    if (originalEmptyRoomTtl === undefined) {
+      delete process.env.EMPTY_ROOM_TTL_MS;
+    } else {
+      process.env.EMPTY_ROOM_TTL_MS = originalEmptyRoomTtl;
+    }
   });
 
   async function start(): Promise<string> {
@@ -60,7 +86,8 @@ describe('Socket.IO game server', () => {
       server?.httpServer.listen(0, '127.0.0.1', () => resolve()),
     );
     const address = server.httpServer.address();
-    if (!address || typeof address === 'string') throw new Error('No test port');
+    if (!address || typeof address === 'string')
+      throw new Error('No test port');
     return `http://127.0.0.1:${address.port}`;
   }
 
@@ -83,7 +110,9 @@ describe('Socket.IO game server', () => {
       roomId: '',
       playerName: 'one',
     });
-    const roomId = (await firstRoomUpdate).roomId;
+    const initialRoomPayload = await firstRoomUpdate;
+    const roomId = initialRoomPayload.roomId;
+    expect(initialRoomPayload).not.toHaveProperty('type');
     expect(roomId).toMatch(/^[a-z0-9]{10}$/);
 
     const isolated = await connect(url);
@@ -123,6 +152,201 @@ describe('Socket.IO game server', () => {
       playerName: 'fifth',
     });
     await expect(rejection).resolves.toMatchObject({ message: 'Room is full' });
+  });
+
+  it('rejects unknown invite IDs without creating a session', async () => {
+    const url = await start();
+    const socket = await connect(url);
+    sockets.push(socket);
+
+    const roomId = 'abcdefghij';
+    const rejection = waitForEvent<{ message: string }>(
+      socket,
+      SystemPacketType.SYSTEM_MESSAGE,
+    );
+    socket.emit(SystemPacketType.JOIN_ROOM, {
+      roomId,
+      playerName: 'guest',
+    });
+
+    await expect(rejection).resolves.toEqual({
+      message: '존재하지 않는 방입니다.',
+    });
+    expect(roomRegistry.getSession(roomId)).toBeUndefined();
+    expect(socket.connected).toBe(true);
+  });
+
+  it('uses the event name as the inbound discriminator', async () => {
+    const url = await start();
+    const socket = await connect(url);
+    sockets.push(socket);
+
+    const joined = waitForEvent<RoomUpdatePacket>(
+      socket,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    socket.emit(SystemPacketType.JOIN_ROOM, {
+      roomId: '',
+      playerName: 'host',
+    });
+    const roomId = (await joined).roomId;
+
+    const chatError = waitForEvent<{ message: string }>(
+      socket,
+      SystemPacketType.LOBBY_CHAT_ERROR,
+    );
+    socket.emit(SystemPacketType.LOBBY_CHAT_SEND, {
+      message: '',
+      type: SystemPacketType.GAME_START_REQ,
+    });
+    await expect(chatError).resolves.toMatchObject({
+      message: expect.stringContaining('100자 이하'),
+    });
+    expect(roomRegistry.getSession(roomId)?.status).toBe('waiting');
+
+    const unsupported = waitForEvent<{ message: string }>(
+      socket,
+      SystemPacketType.SYSTEM_MESSAGE,
+    );
+    socket.emit('UNKNOWN_EVENT', {});
+    await expect(unsupported).resolves.toEqual({
+      message: '지원하지 않는 이벤트입니다.',
+    });
+  });
+
+  it('rejects duplicate joins and starts a default-configured game only once', async () => {
+    const url = await start();
+    const host = await connect(url);
+    sockets.push(host);
+
+    const joined = waitForEvent<RoomUpdatePacket>(
+      host,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    host.emit(SystemPacketType.JOIN_ROOM, {
+      roomId: '',
+      playerName: 'host',
+    });
+    const { roomId } = await joined;
+
+    const duplicate = waitForEvent<{ message: string }>(
+      host,
+      SystemPacketType.SYSTEM_MESSAGE,
+    );
+    host.emit(SystemPacketType.JOIN_ROOM, {
+      roomId,
+      playerName: 'again',
+    });
+    await expect(duplicate).resolves.toMatchObject({
+      message: '이미 방에 참여 중입니다.',
+    });
+    expect(roomRegistry.getSession(roomId)?.players.size).toBe(1);
+
+    const readyPackets: unknown[] = [];
+    host.on(SystemPacketType.READY_SCENE, (packet) =>
+      readyPackets.push(packet),
+    );
+    const ready = waitForEvent<{ selectedGameType: GameType }>(
+      host,
+      SystemPacketType.READY_SCENE,
+    );
+    host.emit(SystemPacketType.GAME_START_REQ, {});
+    host.emit(SystemPacketType.GAME_START_REQ, {});
+
+    await expect(ready).resolves.toEqual({
+      selectedGameType: GameType.APPLE_GAME,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(readyPackets).toHaveLength(1);
+    expect(roomRegistry.getSession(roomId)?.status).toBe('playing');
+  });
+
+  it('uses join/quit updates and returns remaining players to the lobby on disconnect', async () => {
+    const url = await start();
+    const host = await connect(url);
+    const guest = await connect(url);
+    sockets.push(host, guest);
+
+    const hostJoined = waitForEvent<RoomUpdatePacket>(
+      host,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    host.emit(SystemPacketType.JOIN_ROOM, { roomId: '', playerName: 'host' });
+    const { roomId } = await hostJoined;
+
+    const hostSeesJoin = waitForEvent<RoomUpdatePacket>(
+      host,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    const guestJoined = waitForEvent<RoomUpdatePacket>(
+      guest,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    guest.emit(SystemPacketType.JOIN_ROOM, { roomId, playerName: 'guest' });
+    await expect(hostSeesJoin).resolves.toMatchObject({
+      updateType: RoomUpdateType.PLAYER_JOIN,
+      players: expect.arrayContaining([
+        expect.objectContaining({ playerName: 'guest' }),
+      ]),
+    });
+    await guestJoined;
+
+    const hostReady = waitForEvent(host, SystemPacketType.READY_SCENE);
+    const guestReady = waitForEvent(guest, SystemPacketType.READY_SCENE);
+    host.emit(SystemPacketType.GAME_START_REQ, {});
+    await Promise.all([hostReady, guestReady]);
+
+    const guestSeesQuit = waitForEvent<RoomUpdatePacket>(
+      guest,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    host.disconnect();
+    await expect(guestSeesQuit).resolves.toMatchObject({
+      updateType: RoomUpdateType.PLAYER_QUIT,
+      players: [expect.objectContaining({ playerName: 'guest' })],
+    });
+    expect(roomRegistry.getSession(roomId)?.status).toBe('waiting');
+
+    const restarted = waitForEvent(guest, SystemPacketType.READY_SCENE);
+    guest.emit(SystemPacketType.GAME_START_REQ, {});
+    await restarted;
+  });
+
+  it('cancels empty-room cleanup on rejoin and disposes after the next TTL', async () => {
+    process.env.EMPTY_ROOM_TTL_MS = '120';
+    const url = await start();
+    const host = await connect(url);
+    sockets.push(host);
+
+    const hostJoined = waitForEvent<RoomUpdatePacket>(
+      host,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    host.emit(SystemPacketType.JOIN_ROOM, { roomId: '', playerName: 'host' });
+    const { roomId } = await hostJoined;
+    host.disconnect();
+    await waitUntil(() => roomRegistry.getSession(roomId)?.players.size === 0);
+
+    const returning = await connect(url);
+    sockets.push(returning);
+    const rejoined = waitForEvent<RoomUpdatePacket>(
+      returning,
+      SystemPacketType.ROOM_UPDATE,
+    );
+    returning.emit(SystemPacketType.JOIN_ROOM, {
+      roomId,
+      playerName: 'return',
+    });
+    await expect(rejoined).resolves.toMatchObject({
+      roomId,
+      players: [expect.objectContaining({ playerName: 'return' })],
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    expect(roomRegistry.getSession(roomId)).toBeDefined();
+
+    returning.disconnect();
+    await waitUntil(() => roomRegistry.getSession(roomId) === undefined, 1000);
   });
 
   it('waits for the Flappy scene before the one-second countdown', async () => {
@@ -168,11 +392,15 @@ describe('Socket.IO game server', () => {
     const gameStart = waitForEvent<{
       ackTimeoutMs: number;
       inputGraceMs: number;
-    }>(
+    }>(socket, FlappyBirdPacketType.FLAPPY_GAME_START);
+    const syncState = waitForEvent<Omit<FlappySyncStatePacket, 'type'>>(
       socket,
-      FlappyBirdPacketType.FLAPPY_GAME_START,
+      FlappyBirdPacketType.FLAPPY_SYNC_STATE,
     );
     socket.emit(FlappyBirdPacketType.FLAPPY_REQUEST_SYNC, {});
+    const syncPayload = await syncState;
+    expect(syncPayload).not.toHaveProperty('type');
+    expect(syncPayload).toMatchObject({ score: 0, isGameOver: false });
     const { startsAt, countdownMs } = await countdown;
     expect(startsAt - Date.now()).toBeGreaterThan(800);
     expect(countdownMs).toBe(1000);
@@ -188,11 +416,7 @@ describe('Socket.IO game server', () => {
     await new Promise((resolve) => setTimeout(resolve, inputGraceMs / 2));
     expect(worldPackets).toBe(0);
 
-    await waitForEvent(
-      socket,
-      FlappyBirdPacketType.FLAPPY_WORLD_STATE,
-      2500,
-    );
+    await waitForEvent(socket, FlappyBirdPacketType.FLAPPY_WORLD_STATE, 2500);
     expect(worldPackets).toBeGreaterThan(0);
   });
 
@@ -299,10 +523,7 @@ describe('Socket.IO game server', () => {
     });
     await guestJoined;
 
-    const configured = waitForEvent(
-      guest,
-      SystemPacketType.GAME_CONFIG_UPDATE,
-    );
+    const configured = waitForEvent(guest, SystemPacketType.GAME_CONFIG_UPDATE);
     host.emit(SystemPacketType.GAME_CONFIG_UPDATE_REQ, {
       selectedGameType: GameType.FLAPPY_BIRD,
       gameConfig: getDefaultConfig(GameType.FLAPPY_BIRD),
@@ -318,17 +539,23 @@ describe('Socket.IO game server', () => {
     host.emit(SystemPacketType.GAME_START_REQ, {});
     await Promise.all([hostReadyScene, guestReadyScene]);
 
-    const hostStatus = waitForEvent<{ readyCount: number; totalPlayers: number }>(
-      host,
-      FlappyBirdPacketType.FLAPPY_READY_STATUS,
-    );
-    const guestStatus = waitForEvent<{ readyCount: number; totalPlayers: number }>(
-      guest,
-      FlappyBirdPacketType.FLAPPY_READY_STATUS,
-    );
+    const hostStatus = waitForEvent<{
+      readyCount: number;
+      totalPlayers: number;
+    }>(host, FlappyBirdPacketType.FLAPPY_READY_STATUS);
+    const guestStatus = waitForEvent<{
+      readyCount: number;
+      totalPlayers: number;
+    }>(guest, FlappyBirdPacketType.FLAPPY_READY_STATUS);
     host.emit(FlappyBirdPacketType.FLAPPY_REQUEST_SYNC, {});
-    await expect(hostStatus).resolves.toEqual({ readyCount: 1, totalPlayers: 2 });
-    await expect(guestStatus).resolves.toEqual({ readyCount: 1, totalPlayers: 2 });
+    await expect(hostStatus).resolves.toEqual({
+      readyCount: 1,
+      totalPlayers: 2,
+    });
+    await expect(guestStatus).resolves.toEqual({
+      readyCount: 1,
+      totalPlayers: 2,
+    });
 
     let countdownStarted = false;
     host.once(FlappyBirdPacketType.FLAPPY_START_COUNTDOWN, () => {
@@ -344,10 +571,7 @@ describe('Socket.IO game server', () => {
     const gameStart = waitForEvent<{
       ackTimeoutMs: number;
       inputGraceMs: number;
-    }>(
-      host,
-      FlappyBirdPacketType.FLAPPY_GAME_START,
-    );
+    }>(host, FlappyBirdPacketType.FLAPPY_GAME_START);
     guest.emit(FlappyBirdPacketType.FLAPPY_REQUEST_SYNC, {});
     const countdownPacket = await countdown;
     expect(countdownPacket.startsAt - Date.now()).toBeGreaterThan(800);
@@ -389,10 +613,7 @@ describe('Socket.IO game server', () => {
     guest.emit(SystemPacketType.JOIN_ROOM, { roomId, playerName: 'guest' });
     await guestJoined;
 
-    const configured = waitForEvent(
-      guest,
-      SystemPacketType.GAME_CONFIG_UPDATE,
-    );
+    const configured = waitForEvent(guest, SystemPacketType.GAME_CONFIG_UPDATE);
     host.emit(SystemPacketType.GAME_CONFIG_UPDATE_REQ, {
       selectedGameType: GameType.APPLE_GAME,
       gameConfig: getDefaultConfig(GameType.APPLE_GAME),
@@ -413,7 +634,10 @@ describe('Socket.IO game server', () => {
     expect(hostReturned).toBe(false);
 
     const hostLobby = waitForEvent(host, SystemPacketType.RETURN_TO_THE_LOBBY);
-    const guestLobby = waitForEvent(guest, SystemPacketType.RETURN_TO_THE_LOBBY);
+    const guestLobby = waitForEvent(
+      guest,
+      SystemPacketType.RETURN_TO_THE_LOBBY,
+    );
     host.emit(SystemPacketType.RETURN_TO_THE_LOBBY_REQ, {});
     await Promise.all([hostLobby, guestLobby]);
 

@@ -29,7 +29,7 @@ export {
   DEFAULT_MINESWEEPER_CONFIG,
   DEFAULT_RESOLVED_CONFIG,
   resolveMineSweeperPreset,
-} from '../../../../common/src/minesweeperPackets';
+} from '@main-game/common';
 
 // 하위 호환성을 위한 import
 import {
@@ -38,7 +38,7 @@ import {
   type MineSweeperConfig,
   TileState,
   type PlayerId,
-} from '../../../../common/src/minesweeperPackets';
+} from '@main-game/common';
 
 // 하위 호환성을 위한 alias
 export type TileData = ServerTileData;
@@ -86,10 +86,7 @@ export interface ToggleFlagRequest {
 
 // ========== 서버 -> 클라이언트 이벤트 (Mock용 - 추후 제거 예정) ==========
 
-import type {
-  ClientTileData,
-  PlayerScoreData,
-} from '../../../../common/src/minesweeperPackets';
+import type { ClientTileData, PlayerScoreData } from '@main-game/common';
 
 /** 타일 상태 업데이트 */
 export interface TileUpdateEvent {

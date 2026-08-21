@@ -5,7 +5,7 @@ import type {
   PlayerId,
   PipeData,
 } from '../types/flappybird.types';
-import { type ResolvedFlappyBirdConfig } from '../../../../common/src/config';
+import { type ResolvedFlappyBirdConfig } from '@main-game/common';
 import { MockSocket } from '../network/MockSocket';
 import {
   GAME_WIDTH,

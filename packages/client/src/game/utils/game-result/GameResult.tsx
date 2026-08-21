@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PlayerResultData } from '../../types/common';
-import { GameType } from '../../../../../common/src/config';
+import { GameType } from '@main-game/common';
 import type { PlayerId } from '../../types/flappybird.types';
 import AppleResult, { type AppleResultProps } from './AppleResult';
 import FlappyBirdResult, {

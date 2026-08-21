@@ -3,7 +3,7 @@
  *
  * 참고: 실제 게임 설정은 gameStore.gameConfig (AppleGameConfig)를 사용합니다.
  * 이 파일의 타입들은 Lobby UI 호환성을 위해 유지됩니다.
- * 새 코드에서는 common/src/appleGameUtils.ts의 resolveAppleGameConfig()를 사용하세요.
+ * 새 코드에서는 @main-game/common의 resolveAppleGameConfig()를 사용하세요.
  */
 
 /** 사과 생성 개수 프리셋 (S, M, L만 지원) */

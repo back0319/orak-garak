@@ -4,8 +4,8 @@
  */
 
 // PlayerData는 common-type.ts의 공통 규격을 사용
-export type { PlayerData } from '../../../../common/src/common-type';
-import type { PlayerData } from '../../../../common/src/common-type';
+export type { PlayerData } from '@main-game/common';
+import type { PlayerData } from '@main-game/common';
 
 /** 게임 결과를 위한 플레이어 정보 (playerIndex 포함) */
 export interface PlayerResultData extends PlayerData {

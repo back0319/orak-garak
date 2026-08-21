@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { SystemPacketType } from '../../../common/src/packets';
+import { SystemPacketType } from '@main-game/common';
 import { socketManager } from '../network/socket';
 import { useGameStore } from '../store/gameStore';
 

@@ -1,27 +1,23 @@
 import {
   SystemPacketType,
   AppleGamePacketType,
-  type ServerPacket,
-  type RoomUpdatePacket,
-  type GameConfigUpdatePacket,
   FlappyBirdPacketType,
   MineSweeperPacketType,
-} from '../../../common/src/packets.ts';
-import type {
-  MSGameInitPacket,
-  MSTileUpdatePacket,
-  MSScoreUpdatePacket,
-  MSRemainingMinesPacket,
-  MSGameEndPacket,
-} from '../../../common/src/minesweeperPackets.ts';
-import { GameType } from '../../../common/src/config.ts';
-import type { PlayerData } from '../../../common/src/common-type.ts';
+  GameType,
+  type ServerToClientPacket,
+  type MSGameInitPacket,
+  type MSTileUpdatePacket,
+  type MSScoreUpdatePacket,
+  type MSRemainingMinesPacket,
+  type MSGameEndPacket,
+  type PlayerData,
+} from '@main-game/common';
 import { useGameStore } from '../store/gameStore';
 import { sfxManager } from '../audio/sfx-manager.ts';
 import { bgmManager } from '../audio/bgm-manager.ts';
 //import { useDebugStore, useAppleGameStore } from "../store/store.ts";
 
-export const handleServerPacket = (packet: ServerPacket) => {
+export const handleServerPacket = (packet: ServerToClientPacket) => {
   //const appleGameStore = useAppleGameStore.getState();
 
   switch (packet.type) {
@@ -31,19 +27,12 @@ export const handleServerPacket = (packet: ServerPacket) => {
       //debugStore.setCount(packet.number);
       break;
 
-    // todo 클라 핸들러는 이거 필요없는데?
-    // JOIN_ROOM 패킷은 클라이언트가 서버로 보내는 것이므로 여기서 처리 불필요
-    case SystemPacketType.JOIN_ROOM:
-      console.log(`Player ${packet.playerName} joined ${packet.roomId}`);
-      break;
-
     case SystemPacketType.ROOM_UPDATE: {
       // update global store (clientHandler runs outside React)
-      const roomPacket = packet as RoomUpdatePacket;
       const store = useGameStore.getState();
-      store.setPlayers(roomPacket.players || []);
-      store.setMyselfIndex(roomPacket.yourIndex);
-      store.setRoomId(roomPacket.roomId);
+      store.setPlayers(packet.players || []);
+      store.setMyselfIndex(packet.yourIndex);
+      store.setRoomId(packet.roomId);
 
       // 게임 중이었다면 게임 상태 초기화 (플레이어 탈주로 인한 ROOM_UPDATE)
       if (store.screen === 'game' || store.isGameStarted) {
@@ -68,20 +57,18 @@ export const handleServerPacket = (packet: ServerPacket) => {
       }
 
       console.log(
-        `ROOM_UPDATE packet received: , ${roomPacket.updateType}, ${roomPacket.yourIndex}`,
-        roomPacket.players,
+        `ROOM_UPDATE packet received: , ${packet.updateType}, ${packet.yourIndex}`,
+        packet.players,
       );
       break;
     }
 
     case SystemPacketType.GAME_CONFIG_UPDATE: {
-      // todo 굳이 형변환 안 해줘도 알아서 type narrow 해줄 거임.
-      const cfgPacket = packet as GameConfigUpdatePacket;
       // store selected game type and config so UI can react
       useGameStore
         .getState()
-        .setGameConfig(cfgPacket.selectedGameType, cfgPacket.gameConfig);
-      console.log('GAME_CONFIG_UPDATE received:', cfgPacket);
+        .setGameConfig(packet.selectedGameType, packet.gameConfig);
+      console.log('GAME_CONFIG_UPDATE received:', packet);
       break;
     }
 
@@ -364,31 +351,31 @@ export const handleServerPacket = (packet: ServerPacket) => {
     // Minesweeper 패킷
     case MineSweeperPacketType.MS_GAME_INIT: {
       console.log('MS_GAME_INIT received:', packet);
-      handleMSGameInit(packet as MSGameInitPacket);
+      handleMSGameInit(packet);
       break;
     }
 
     case MineSweeperPacketType.MS_TILE_UPDATE: {
       console.log('MS_TILE_UPDATE received:', packet);
-      handleMSTileUpdate(packet as MSTileUpdatePacket);
+      handleMSTileUpdate(packet);
       break;
     }
 
     case MineSweeperPacketType.MS_SCORE_UPDATE: {
       console.log('MS_SCORE_UPDATE received:', packet);
-      handleMSScoreUpdate(packet as MSScoreUpdatePacket);
+      handleMSScoreUpdate(packet);
       break;
     }
 
     case MineSweeperPacketType.MS_REMAINING_MINES: {
       console.log('MS_REMAINING_MINES received:', packet);
-      handleMSRemainingMines(packet as MSRemainingMinesPacket);
+      handleMSRemainingMines(packet);
       break;
     }
 
     case MineSweeperPacketType.MS_GAME_END: {
       console.log('MS_GAME_END received:', packet);
-      handleMSGameEnd(packet as MSGameEndPacket);
+      handleMSGameEnd(packet);
       break;
     }
 

@@ -10,7 +10,7 @@ import type {
   PipeSpacingPreset,
   PipeSpeedPreset,
   RopeLengthPreset,
-} from '../../../common/src/config';
+} from '@main-game/common';
 import type { Game, GameSettings } from '../game/types/common';
 import type {
   MineSweeperGamePreset,
@@ -21,15 +21,15 @@ import type {
 import { CONSTANTS } from '../game/types/common';
 import SoundSetting from './SoundSetting';
 import { useGameStore } from '../store/gameStore';
-import { SystemPacketType } from '../../../common/src/packets';
 import {
   MapSize,
   GameType,
   MAP_SIZE_TO_GRID,
-} from '../../../common/src/config.ts';
-import type { AppleGameRenderConfig } from '../../../common/src/config.ts';
+  SystemPacketType,
+  type AppleGameRenderConfig,
+  type PlayerData,
+} from '@main-game/common';
 import { socketManager } from '../network/socket';
-import type { PlayerData } from '../../../common/src/common-type';
 
 export interface LobbyProps {
   players: PlayerData[];
@@ -398,8 +398,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
       const appleRange: '1-9' | '1-5' = cfg.maxNumber === 5 ? '1-5' : '1-9';
 
       // 입력 중이면 timeLimit은 덮어쓰지 않음
-      const isEditingAppleTime =
-        localTimeInput['apple'] !== undefined;
+      const isEditingAppleTime = localTimeInput['apple'] !== undefined;
 
       setTimeout(() => {
         setGameSettings((prev) => ({
