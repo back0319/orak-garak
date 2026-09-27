@@ -15,6 +15,7 @@ import {
 import type { GameSocket, GameSocketServer } from './network/socketTypes';
 
 const DEFAULT_ORIGINS = [
+  'https://orakgarak.vercel.app',
   'https://orak-garak.vercel.app',
   'http://localhost:5173',
 ];
@@ -31,7 +32,7 @@ export function isAllowedOrigin(origin?: string): boolean {
     return true;
   }
 
-  return /^https:\/\/orak-garak(?:-[a-z0-9-]+)*\.vercel\.app$/.test(origin);
+  return /^https:\/\/orak-?garak(?:-[a-z0-9-]+)*\.vercel\.app$/.test(origin);
 }
 
 export interface GameServer {

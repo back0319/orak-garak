@@ -2,7 +2,7 @@ param location string = 'koreacentral'
 param environmentName string = 'orak-garak-env'
 param appName string = 'orak-garak-server'
 param image string
-param allowedOrigins string = 'https://orak-garak.vercel.app,http://localhost:5173'
+param allowedOrigins string = 'https://orakgarak.vercel.app,https://orak-garak.vercel.app,http://localhost:5173'
 
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: environmentName
