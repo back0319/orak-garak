@@ -3,7 +3,6 @@ import {
   type AppleGameRenderConfig,
   DEFAULT_APPLE_GAME_RENDER_CONFIG,
   GameType,
-  type AppleGamePacket,
   AppleGamePacketType,
   type DropCellIndexPacket,
   type SetFieldPacket,
@@ -15,9 +14,10 @@ import {
   type PlayerData,
   type ReportCard,
   toSocketPayload,
+  type GameClientPacket,
 } from '@main-game/common';
 import { GameSession } from '../gameSession';
-import { Socket } from 'socket.io';
+import type { GameSocket } from '../../network/socketTypes';
 
 export class AppleGameInstance implements GameInstance {
   private apples: number[] = [];
@@ -26,18 +26,6 @@ export class AppleGameInstance implements GameInstance {
   private timeLeft: number = 0;
   private endsAt = 0;
   private finished = false;
-
-  // Player ID -> last drag area & repeat count
-  private playerDragState = new Map<
-    number,
-    {
-      startX: number;
-      startY: number;
-      endX: number;
-      endY: number;
-      repeatCount: number;
-    }
-  >();
 
   private session: GameSession;
 
@@ -105,79 +93,33 @@ export class AppleGameInstance implements GameInstance {
     this.stop();
   }
 
-  // todo 얘내 gameSession으로 빼내야 함
   handlePacket(
-    socket: Socket,
+    socket: GameSocket,
     _playerIndex: number,
-    packet: AppleGamePacket,
+    packet: GameClientPacket,
   ): void {
     switch (packet.type) {
-      case AppleGamePacketType.DRAWING_DRAG_AREA:
-        // 브로드캐스트 (나 제외)
-        // 검증 로직 필요함. 게임 안쪽 영역이 맞는지, 그리고 정규화된 건지
-        // 드래그 영역은 정규화가 필요함.
-        // 추가: 이전에 보냈던 것과 동일한지 비교해 동일한 패킷이 3번까지만 브로드캐스트,
-        // 4번째부터는 무시하도록 함.
-        const playerIndex = this.session.getIndex(socket.id);
-        const sx = packet.startX;
-        const sy = packet.startY;
-        const ex = packet.endX;
-        const ey = packet.endY;
+      case AppleGamePacketType.DRAWING_DRAG_AREA: {
+        const { startX, startY, endX, endY } = packet;
+        if (![startX, startY, endX, endY].every(Number.isFinite)) return;
 
-        const prev = this.playerDragState.get(playerIndex);
-        const isSame =
-          !!prev &&
-          prev.startX === sx &&
-          prev.startY === sy &&
-          prev.endX === ex &&
-          prev.endY === ey;
-
-        if (isSame) {
-          prev.repeatCount = (prev.repeatCount || 0) + 1;
-          if (prev.repeatCount <= 3 || true) {
-            const updatePacket: UpdateDragAreaPacket = {
-              type: AppleGamePacketType.UPDATE_DRAG_AREA,
-              playerIndex,
-              startX: sx,
-              startY: sy,
-              endX: ex,
-              endY: ey,
-            };
-            socket
-              .to(this.session.roomId)
-              .emit(
-                AppleGamePacketType.UPDATE_DRAG_AREA,
-                toSocketPayload(updatePacket),
-              );
-          } else {
-            // 4번째 이상 동일한 패킷은 무시
-            // 필요하면 로깅 추가
-          }
-        } else {
-          this.playerDragState.set(playerIndex, {
-            startX: sx,
-            startY: sy,
-            endX: ex,
-            endY: ey,
-            repeatCount: 1,
-          });
-          const updatePacket: UpdateDragAreaPacket = {
-            type: AppleGamePacketType.UPDATE_DRAG_AREA,
-            playerIndex,
-            startX: sx,
-            startY: sy,
-            endX: ex,
-            endY: ey,
-          };
-          socket
-            .to(this.session.roomId)
-            .emit(
-              AppleGamePacketType.UPDATE_DRAG_AREA,
-              toSocketPayload(updatePacket),
-            );
-        }
-
+        // 드래그 중인 영역은 본인을 제외한 방 인원에게 그대로 중계한다.
+        const updatePacket: UpdateDragAreaPacket = {
+          type: AppleGamePacketType.UPDATE_DRAG_AREA,
+          playerIndex: this.session.getIndex(socket.id),
+          startX,
+          startY,
+          endX,
+          endY,
+        };
+        socket
+          .to(this.session.roomId)
+          .emit(
+            AppleGamePacketType.UPDATE_DRAG_AREA,
+            toSocketPayload(updatePacket),
+          );
         break;
+      }
       case AppleGamePacketType.CONFIRM_DRAG_AREA:
         this.handleDragConfirm(socket.id, packet.indices);
         break;
@@ -264,7 +206,28 @@ export class AppleGameInstance implements GameInstance {
     this.session.broadcastPacket(endPacket);
   }
 
-  public handleDragConfirm(playerId: string, indices: number[]) {
+  /** 정수·범위·중복을 검사해 같은 사과를 여러 번 세는 요청을 막는다. */
+  private normalizeIndices(rawIndices: unknown): number[] | null {
+    if (!Array.isArray(rawIndices) || rawIndices.length === 0) return null;
+    const unique = new Set<number>();
+    for (const index of rawIndices) {
+      if (
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= this.apples.length ||
+        unique.has(index)
+      ) {
+        return null;
+      }
+      unique.add(index);
+    }
+    return [...unique];
+  }
+
+  public handleDragConfirm(playerId: string, rawIndices: unknown) {
+    const indices = this.normalizeIndices(rawIndices);
+    if (!indices) return;
+
     // Check if any index is already removed (Race condition check)
     const alreadyTaken = indices.some((idx) => this.removedIndices.has(idx));
     if (alreadyTaken) {

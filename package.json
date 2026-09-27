@@ -6,9 +6,9 @@
   "scripts": {
     "dev": "pnpm --filter ./packages/client dev",
     "dev:server": "pnpm --filter ./packages/server dev",
-    "build": "pnpm --filter ./packages/common build && pnpm --filter ./packages/client build && node -e \"const fs = require('fs'); if (fs.existsSync('dist')) fs.rmSync('dist', { recursive: true, force: true }); fs.cpSync('packages/client/dist', 'dist', { recursive: true });\"",
-    "build:server": "pnpm --filter ./packages/common build && pnpm --filter ./packages/server build",
-    "type-check": "pnpm --filter ./packages/common type-check && pnpm --filter ./packages/common build && pnpm --filter ./packages/server type-check && pnpm --filter ./packages/client type-check",
+    "build": "pnpm --filter ./packages/client build && node -e \"const fs = require('fs'); if (fs.existsSync('dist')) fs.rmSync('dist', { recursive: true, force: true }); fs.cpSync('packages/client/dist', 'dist', { recursive: true });\"",
+    "build:server": "pnpm --filter ./packages/server build",
+    "type-check": "pnpm --filter ./packages/common type-check && pnpm --filter ./packages/server type-check && pnpm --filter ./packages/client type-check",
     "test:server": "pnpm --filter ./packages/server test",
     "check:deploy": "pnpm type-check && pnpm test:server && pnpm build && pnpm build:server",
     "preview": "pnpm --filter ./packages/client preview",

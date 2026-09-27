@@ -155,6 +155,7 @@ export {
   isServerToClientEventName,
   type SocketPayload,
   type ClientToServerPacket,
+  type GameClientPacket,
   type ServerToClientPacket,
   type ClientToServerPayloads,
   type ServerToClientPayloads,
@@ -163,3 +164,12 @@ export {
   type ClientToServerEventName,
   type ServerToClientEventName,
 } from './socketEvents';
+
+// ========== Config Sanitizers ==========
+export {
+  CONFIG_LIMITS,
+  isGameType,
+  sanitizeFlappyBirdPreset,
+  sanitizeMineSweeperPreset,
+  sanitizeGameConfig,
+} from './configSanitizers';

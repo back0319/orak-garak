@@ -64,6 +64,12 @@ export type ClientToServerPacket =
   | MSToggleFlagPacket
   | MSRequestSyncPacket;
 
+/** 방/로비 공통 패킷을 제외한, 진행 중인 게임 인스턴스가 처리하는 패킷 */
+export type GameClientPacket = Exclude<
+  ClientToServerPacket,
+  { type: SystemPacketType }
+>;
+
 export type ServerToClientPacket =
   | UpdateNumberPacket
   | RoomUpdatePacket

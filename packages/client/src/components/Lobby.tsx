@@ -382,7 +382,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
     if (!serverSelectedGame || !serverGameConfig) return;
 
     // Map common GameType to local game id
-    if (serverSelectedGame === ('APPLE_GAME' as unknown as GameType)) {
+    if (serverSelectedGame === GameType.APPLE_GAME) {
       // schedule selection update to avoid synchronous setState in effect
       setTimeout(() => setSelectedGame('apple'));
 
@@ -414,7 +414,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
           },
         }));
       });
-    } else if (serverSelectedGame === ('FLAPPY_BIRD' as unknown as GameType)) {
+    } else if (serverSelectedGame === GameType.FLAPPY_BIRD) {
       setTimeout(() => setSelectedGame('flappy'));
 
       const cfg = serverGameConfig as FlappyBirdGamePreset;
@@ -433,7 +433,7 @@ function Lobby({ players, onGameStart }: LobbyProps) {
           },
         }));
       });
-    } else if (serverSelectedGame === ('MINESWEEPER' as unknown as GameType)) {
+    } else if (serverSelectedGame === GameType.MINESWEEPER) {
       setTimeout(() => setSelectedGame('minesweeper'));
 
       const cfg = serverGameConfig as MineSweeperGamePreset;

@@ -1,5 +1,5 @@
-import type { Socket } from 'socket.io';
-import type { GameConfig } from '@main-game/common';
+import type { GameClientPacket, GameConfig } from '@main-game/common';
+import type { GameSocket } from '../../network/socketTypes';
 
 export interface GameInstance {
   // Lifecycle
@@ -8,7 +8,10 @@ export interface GameInstance {
   stop(): void;
   destroy(): void;
 
-  // Player actions (game-specific packets)
-  // todo 패킷 자체는 serverHandler 에서 각 라우팅을 해서 핸들링을 하되 거기서 session 것을 호출하도록?
-  handlePacket(socket: Socket, playerIndex: number, packet: any): void;
+  // 게임별 클라이언트 패킷 처리
+  handlePacket(
+    socket: GameSocket,
+    playerIndex: number,
+    packet: GameClientPacket,
+  ): void;
 }

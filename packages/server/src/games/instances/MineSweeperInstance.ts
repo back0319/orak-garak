@@ -5,7 +5,7 @@
  * GameInstance 인터페이스를 구현하여 GameSession과 통합됩니다.
  */
 
-import { Socket } from 'socket.io';
+import type { GameSocket } from '../../network/socketTypes';
 import { GameInstance } from './GameInstance';
 import { GameSession } from '../gameSession';
 import {
@@ -28,6 +28,7 @@ import {
   type SetTimePacket,
   PLAYER_COLORS,
   toSocketPayload,
+  type GameClientPacket,
 } from '@main-game/common';
 
 /** 연쇄 타일 열기 최대 점수 (지뢰 페널티 제외) */
@@ -140,7 +141,11 @@ export class MineSweeperInstance implements GameInstance {
 
   // ========== PACKET HANDLING ==========
 
-  handlePacket(socket: Socket, _playerIndex: number, packet: any): void {
+  handlePacket(
+    socket: GameSocket,
+    _playerIndex: number,
+    packet: GameClientPacket,
+  ): void {
     const playerId = socket.id;
     console.log(
       `[MineSweeperInstance] handlePacket 호출됨 - type: ${packet.type}, playerId: ${playerId}`,
@@ -278,12 +283,7 @@ export class MineSweeperInstance implements GameInstance {
     }
 
     // 유효성 검사
-    if (
-      row < 0 ||
-      row >= this.config.gridRows ||
-      col < 0 ||
-      col >= this.config.gridCols
-    ) {
+    if (!this.isInBounds(row, col)) {
       console.warn(`[MineSweeperInstance] 잘못된 타일 좌표: (${row}, ${col})`);
       return;
     }
@@ -516,16 +516,23 @@ export class MineSweeperInstance implements GameInstance {
     };
   }
 
+  private isInBounds(row: unknown, col: unknown): boolean {
+    return (
+      !!this.config &&
+      Number.isInteger(row) &&
+      Number.isInteger(col) &&
+      (row as number) >= 0 &&
+      (row as number) < this.config.gridRows &&
+      (col as number) >= 0 &&
+      (col as number) < this.config.gridCols
+    );
+  }
+
   private handleToggleFlag(playerId: PlayerId, row: number, col: number): void {
     if (!this.config) return;
 
     // 유효성 검사
-    if (
-      row < 0 ||
-      row >= this.config.gridRows ||
-      col < 0 ||
-      col >= this.config.gridCols
-    ) {
+    if (!this.isInBounds(row, col)) {
       console.warn(`[MineSweeperInstance] 잘못된 타일 좌표: (${row}, ${col})`);
       return;
     }
@@ -825,7 +832,7 @@ export class MineSweeperInstance implements GameInstance {
    * 게임 상태 동기화 요청 처리
    * 클라이언트가 씬 로딩 완료 후 현재 게임 상태를 요청할 때 호출
    */
-  private handleRequestSync(socket: Socket): void {
+  private handleRequestSync(socket: GameSocket): void {
     if (!this.config) {
       console.warn('[MineSweeperInstance] handleRequestSync - config 없음');
       return;

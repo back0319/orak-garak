@@ -214,6 +214,34 @@ describe('Socket.IO game server', () => {
     });
   });
 
+  it('syncs the current config to the room creator and rejects unknown games', async () => {
+    const url = await start();
+    const socket = await connect(url);
+    sockets.push(socket);
+
+    const initialConfig = waitForEvent<{
+      selectedGameType: GameType;
+      gameConfig: unknown;
+    }>(socket, SystemPacketType.GAME_CONFIG_UPDATE);
+    socket.emit(SystemPacketType.JOIN_ROOM, { roomId: '', playerName: 'host' });
+    await expect(initialConfig).resolves.toEqual({
+      selectedGameType: GameType.APPLE_GAME,
+      gameConfig: getDefaultConfig(GameType.APPLE_GAME),
+    });
+
+    const rejected = waitForEvent<{ message: string }>(
+      socket,
+      SystemPacketType.SYSTEM_MESSAGE,
+    );
+    socket.emit(SystemPacketType.GAME_CONFIG_UPDATE_REQ, {
+      selectedGameType: 'SNAKE' as GameType,
+      gameConfig: getDefaultConfig(GameType.APPLE_GAME),
+    });
+    await expect(rejected).resolves.toEqual({
+      message: '지원하지 않는 게임입니다.',
+    });
+  });
+
   it('rejects duplicate joins and starts a default-configured game only once', async () => {
     const url = await start();
     const host = await connect(url);

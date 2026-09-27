@@ -3,8 +3,6 @@
     "target": "ES2020",
     "module": "ESNext",
     "lib": ["ES2020"],
-    "outDir": "dist",
-    "rootDir": ".",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -14,7 +12,10 @@
     "noEmit": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "@main-game/common": ["../common/src/index.ts"]
+    }
   },
   "include": ["src", "test"],
   "exclude": ["dist", "node_modules"]

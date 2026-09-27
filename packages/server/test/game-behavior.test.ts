@@ -235,4 +235,33 @@ describe('restored original game behavior', () => {
 
     game.destroy();
   });
+
+  it('rejects duplicate or out-of-range Apple indices', () => {
+    const packets: ServerToClientPacket[] = [];
+    const session = {
+      selectedGameType: GameType.APPLE_GAME,
+      status: 'playing',
+      players: new Map([['one', player('one')]]),
+      gameConfigs: new Map(),
+      broadcastPacket: (packet: ServerToClientPacket) => packets.push(packet),
+      stopGame: vi.fn(),
+      getIndex: () => 0,
+      roomId: 'testroom00',
+    } as unknown as GameSession;
+
+    const game = new AppleGameInstance(session);
+    game.initialize(DEFAULT_APPLE_GAME_RENDER_CONFIG);
+    const internal = game as unknown as { apples: number[] };
+    internal.apples[0] = 5;
+    internal.apples[1] = 5;
+
+    game.handleDragConfirm('one', [0, 0]);
+    game.handleDragConfirm('one', [0, internal.apples.length]);
+    game.handleDragConfirm('one', [0, 1.5]);
+    game.handleDragConfirm('one', 'nope');
+    expect(session.players.get('one')?.reportCard.score).toBe(0);
+
+    game.handleDragConfirm('one', [0, 1]);
+    expect(session.players.get('one')?.reportCard.score).toBe(2);
+  });
 });

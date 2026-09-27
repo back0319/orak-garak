@@ -11,19 +11,18 @@ import {
   type PlayerState,
   GameType,
   type GameConfig,
-  type AppleGameRenderConfig,
   type LobbyChatMessage,
-  sanitizeForApple,
+  sanitizeGameConfig,
   FlappyBirdPacketType,
   getDefaultConfig,
   toSocketPayload,
+  type GameClientPacket,
 } from '@main-game/common';
-import { Socket } from 'socket.io';
 import { GameInstance } from './instances/GameInstance';
 import { AppleGameInstance } from './instances/AppleGameInstance';
 import { FlappyBirdInstance } from './instances/FlappyBirdInstance';
 import { MineSweeperInstance } from './instances/MineSweeperInstance';
-import type { GameSocketServer } from '../network/socketTypes';
+import type { GameSocket, GameSocketServer } from '../network/socketTypes';
 
 export class GameSession {
   private static readonly FLAPPY_COUNTDOWN_MS = 1_000;
@@ -194,62 +193,27 @@ export class GameSession {
 
   // ========== GAME LIFECYCLE ==========
 
-  public updateGameConfig(
-    selectedGameType: GameType,
-    inputGameConfig: GameConfig,
-  ) {
-    console.log(
-      '[GameSession] Updating game config:',
-      selectedGameType,
-      inputGameConfig,
-    );
-    // Remember previous selected game type so we can decide whether to
-    // treat identical configs as changes when the game type changed.
+  public updateGameConfig(selectedGameType: GameType, rawGameConfig: unknown) {
     const prevSelectedGameType = this.selectedGameType;
-    // Update the session's selected game type based on the incoming packet
+    const existingConfig = this.gameConfigs.get(selectedGameType);
+    const storedConfig = sanitizeGameConfig(
+      selectedGameType,
+      existingConfig,
+      rawGameConfig,
+    );
+
     this.selectedGameType = selectedGameType;
 
-    // Validate & sanitize incoming config before storing.
-    // IMPORTANT: If a field is missing or invalid, prefer the existing stored
-    // config value for this session. Only fall back to global defaults when
-    // there is no existing stored value.
-    let storedConfig: GameConfig = inputGameConfig;
-    if (selectedGameType === GameType.APPLE_GAME) {
-      // todo 얘내 얕은 참조 아님?
-      const existingCfg = this.gameConfigs.get(GameType.APPLE_GAME) as
-        | AppleGameRenderConfig
-        | undefined;
-      storedConfig = sanitizeForApple(existingCfg, inputGameConfig);
-      // If the new sanitized config has no differences from the existing
-      // stored config for this session, avoid storing and broadcasting it.
-      const prev = existingCfg;
-      const curr = storedConfig as AppleGameRenderConfig;
-      const noChange =
-        this.configuredGameTypes.has(selectedGameType) &&
-        prev &&
-        prev.gridCols === curr.gridCols &&
-        prev.gridRows === curr.gridRows &&
-        prev.minNumber === curr.minNumber &&
-        prev.maxNumber === curr.maxNumber &&
-        prev.totalTime === curr.totalTime &&
-        prev.includeZero === curr.includeZero &&
-        // Only treat as duplicate (skip) when the previously-selected
-        // game type is the same as the incoming one.
-        prevSelectedGameType === selectedGameType;
-      if (noChange) {
-        console.log(
-          '[GameSession] No change in game config; skipping update broadcast.',
-        );
-        return;
-      }
-    }
+    // 같은 게임의 같은 설정이 다시 들어오면 브로드캐스트를 생략한다.
+    const noChange =
+      prevSelectedGameType === selectedGameType &&
+      this.configuredGameTypes.has(selectedGameType) &&
+      isSameConfig(existingConfig, storedConfig);
+    if (noChange) return;
 
-    // store the sanitized config
     this.gameConfigs.set(selectedGameType, storedConfig);
     this.configuredGameTypes.add(selectedGameType);
-    // todo 제거 대상 this.gameConfigs.set(selectedGameType, storedConfig);
 
-    // Notify clients about the updated game config
     const gameConfigUpdatePacket: GameConfigUpdatePacket = {
       type: SystemPacketType.GAME_CONFIG_UPDATE,
       selectedGameType,
@@ -380,7 +344,7 @@ export class GameSession {
   }
 
   // ========== PACKET ROUTING ==========
-  public handleGamePacket(socket: Socket, packet: any): void {
+  public handleGamePacket(socket: GameSocket, packet: GameClientPacket): void {
     if (!this.games || this.status !== 'playing') {
       console.log(
         `[GameSession] handleGamePacket 무시됨 - games: ${!!this.games}, status: ${this.status}`,
@@ -506,4 +470,18 @@ export class GameSession {
     // Socket.IO event name이 discriminator이며 payload에는 type을 중복하지 않는다.
     this.io.to(this.roomId).emit(packet.type, toSocketPayload(packet) as never);
   }
+}
+
+function isSameConfig(prev: GameConfig | undefined, next: GameConfig): boolean {
+  if (!prev) return false;
+  const prevRecord = prev as unknown as Record<string, unknown>;
+  const nextRecord = next as unknown as Record<string, unknown>;
+  const keys = new Set([
+    ...Object.keys(prevRecord),
+    ...Object.keys(nextRecord),
+  ]);
+  for (const key of keys) {
+    if (prevRecord[key] !== nextRecord[key]) return false;
+  }
+  return true;
 }

@@ -12,9 +12,10 @@ import {
   type FlappyPipeData,
   type FlappyBirdData,
   toSocketPayload,
+  type GameClientPacket,
 } from '@main-game/common';
 import { GameSession } from '../gameSession';
-import { Socket } from 'socket.io';
+import type { GameSocket } from '../../network/socketTypes';
 
 // 상수 추출
 const {
@@ -180,7 +181,11 @@ export class FlappyBirdInstance implements GameInstance {
     console.log('[FlappyBirdInstance] 정리 완료');
   }
 
-  handlePacket(socket: Socket, playerIndex: number, packet: any): void {
+  handlePacket(
+    socket: GameSocket,
+    playerIndex: number,
+    packet: GameClientPacket,
+  ): void {
     switch (packet.type) {
       case FlappyBirdPacketType.FLAPPY_JUMP:
         this.handleJump(playerIndex);
@@ -195,7 +200,7 @@ export class FlappyBirdInstance implements GameInstance {
    * 클라이언트 씬 로딩 완료 후 동기화 요청 처리
    * 현재 게임 상태를 해당 클라이언트에게 전송
    */
-  private handleSyncRequest(socket: Socket): void {
+  private handleSyncRequest(socket: GameSocket): void {
     // 현재 새 위치 정보
     const birds: FlappyBirdData[] = this.birds.map((bird) => ({
       x: bird.position.x,
@@ -628,8 +633,6 @@ export class FlappyBirdInstance implements GameInstance {
     console.log(
       `[FlappyBirdInstance] 게임 오버: ${reason} (Player ${playerIndex}), birds: ${birds.length}, cameraX: ${cameraX}`,
     );
-
-    this.session.stopGame();
   }
 
   // ========== 입력 처리 ==========

@@ -7,6 +7,7 @@ import {
   type LobbyChatHistoryPacket,
   type LobbyChatMessagePacket,
   toSocketPayload,
+  isGameType,
 } from '@main-game/common';
 import type { GameSession } from '../games/gameSession';
 import { roomRegistry } from '../rooms/roomRegistry';
@@ -210,6 +211,12 @@ export function handleClientPacket(
           });
           break;
         }
+        if (!isGameType(packet.selectedGameType)) {
+          socket.emit(SystemPacketType.SYSTEM_MESSAGE, {
+            message: '지원하지 않는 게임입니다.',
+          });
+          break;
+        }
         session.updateGameConfig(packet.selectedGameType, packet.gameConfig);
         break;
 
@@ -220,25 +227,11 @@ export function handleClientPacket(
       case SystemPacketType.REPLAY_REQ:
         session.handleReplayRequest(socket.id);
         break;
-    }
 
-    // 게임별 패킷 라우팅
-    if (packet.type.startsWith('APPLE_')) {
-      session.handleGamePacket(socket, packet);
-      return;
-    }
-
-    if (packet.type.startsWith('FLAPPY_')) {
-      session.handleGamePacket(socket, packet);
-      return;
-    }
-
-    if (packet.type.startsWith('MS_')) {
-      console.log(
-        `[Server] MS_ 패킷 라우팅 - roomId: ${roomId}, session status: ${session.status}`,
-      );
-      session.handleGamePacket(socket, packet);
-      return;
+      default:
+        // 시스템 패킷이 아니면 현재 게임 인스턴스로 전달한다.
+        session.handleGamePacket(socket, packet);
+        break;
     }
   } catch (error) {
     console.error(`[Server] Error handling packet ${packet.type}:`, error);
@@ -377,22 +370,25 @@ export async function joinPlayerToGame(
     `[Server] Sent ROOM_UPDATE (${roomUpdatePacket2Player.updateType}) to ${socket.id}`,
   );
 
-  if (createdSession) return;
+  // 방 생성자를 포함한 모든 입장자가 서버의 현재 게임 설정을 기준으로 로비를 그린다.
+  emitCurrentGameConfig(socket, session);
 
-  session.updateRemainingPlayers(socket.id, RoomUpdateType.PLAYER_JOIN);
-
-  // 현재 게임 설정을 새 플레이어에게 전송 (동기화)
-  const currentConfig = session.gameConfigs.get(session.selectedGameType);
-  if (currentConfig) {
-    const configPacket: GameConfigUpdatePacket = {
-      type: SystemPacketType.GAME_CONFIG_UPDATE,
-      selectedGameType: session.selectedGameType,
-      gameConfig: currentConfig,
-    };
-    socket.emit(
-      SystemPacketType.GAME_CONFIG_UPDATE,
-      toSocketPayload(configPacket),
-    );
-    console.log(`[Server] Sent GAME_CONFIG_UPDATE to new player ${socket.id}`);
+  if (!createdSession) {
+    session.updateRemainingPlayers(socket.id, RoomUpdateType.PLAYER_JOIN);
   }
+}
+
+function emitCurrentGameConfig(socket: GameSocket, session: GameSession): void {
+  const gameConfig = session.gameConfigs.get(session.selectedGameType);
+  if (!gameConfig) return;
+
+  const configPacket: GameConfigUpdatePacket = {
+    type: SystemPacketType.GAME_CONFIG_UPDATE,
+    selectedGameType: session.selectedGameType,
+    gameConfig,
+  };
+  socket.emit(
+    SystemPacketType.GAME_CONFIG_UPDATE,
+    toSocketPayload(configPacket),
+  );
 }

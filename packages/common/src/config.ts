@@ -30,7 +30,7 @@ export const DEFAULT_APPLE_GAME_RENDER_CONFIG: AppleGameRenderConfig = {
   gridRows: 10,
   minNumber: 1,
   maxNumber: 9,
-  totalTime: 110,
+  totalTime: 120,
   includeZero: false,
 };
 
@@ -317,7 +317,9 @@ export function sanitizeForApple(
 
   // minNumber: 0 또는 1
   const minNumber =
-    raw?.minNumber === 0 ? 0 : (existingCfg?.minNumber ?? defaults.minNumber);
+    raw?.minNumber === 0 || raw?.minNumber === 1
+      ? raw.minNumber
+      : (existingCfg?.minNumber ?? defaults.minNumber);
 
   // maxNumber: 5 또는 9
   let maxNumber: number;
